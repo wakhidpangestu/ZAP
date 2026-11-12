@@ -1,4 +1,14 @@
 /** @type {import('next').NextConfig} */
+const isDev = process.env.NODE_ENV !== "production";
+
+const scriptSrc = isDev
+  ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com"
+  : "script-src 'self' 'unsafe-inline' https://accounts.google.com";
+
+const connectSrc = isDev
+  ? "connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*"
+  : "connect-src 'self' https: http://127.0.0.1:8000 http://localhost:8000 http://127.0.0.1:11434 http://localhost:11434";
+
 const nextConfig = {
   output: "standalone",
   experimental: {
@@ -41,12 +51,8 @@ const nextConfig = {
             value: "camera=(), microphone=(), geolocation=()",
           },
           {
-            // CSP pragmatis untuk Next.js + Google Sign-In (GSI):
-            // 'unsafe-inline' masih diperlukan untuk script/style inline
-            // bawaan Next dan tombol GSI; frame hanya untuk accounts.google.com.
             key: "Content-Security-Policy",
-            value:
-              "default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: blob: https:; connect-src 'self' https:; font-src 'self' data: https://fonts.gstatic.com; frame-src https://accounts.google.com",
+            value: `default-src 'self'; ${scriptSrc}; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: blob: https:; ${connectSrc}; font-src 'self' data: https://fonts.gstatic.com; frame-src https://accounts.google.com`,
           },
           {
             key: "Strict-Transport-Security",
