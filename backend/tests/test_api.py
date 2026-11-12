@@ -275,3 +275,32 @@ class TestZAPAPI:
         detail_str = str(detail).lower()
         assert "tidak diizinkan" in detail_str
 
+
+    def test_agent_harness_learner_profile_flow(self):
+        """
+        Profil belajar per pengguna: learn dengan user_id memperbarui agregat,
+        endpoint profile membacanya, dan context menyuntikkan [LEARNER_PROFILE].
+        """
+        uid = "uji.profil@example.com"
+        payload = {
+            "user_message": "bantu cek coretan saya: 2x + 6 = 14 -> 2x = 20 -> x = 10",
+            "assistant_reply": "Coba perhatikan saat +6 pindah ruas, tandanya berubah menjadi apa?",
+            "target_variable": "x",
+            "user_id": uid,
+        }
+        response = client.post("/api/v1/harness/learn", json=payload)
+        assert response.status_code == 200
+        profile = response.json()["learner_profile"]
+        assert profile is not None and profile["turns"] >= 1
+        assert profile["fault_turns"] >= 1
+
+        response = client.get("/api/v1/harness/profile", params={"user_id": uid})
+        assert response.status_code == 200
+        assert response.json()["learner_profile"]["turns"] >= 1
+
+        response = client.post(
+            "/api/v1/harness/context",
+            json={"query": "persamaan linear satu variabel", "user_id": uid},
+        )
+        assert response.status_code == 200
+        assert "[LEARNER_PROFILE]" in response.json()["harness_context"]

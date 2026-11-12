@@ -168,7 +168,7 @@ export default function LoginPage() {
                   className="w-full py-2.5 px-3 min-h-[38px] rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-white dark:hover:bg-zinc-200 dark:text-zinc-950 font-semibold text-xs flex items-center justify-center gap-1.5 transition active:scale-[0.98] shadow-sm cursor-pointer"
                 >
                   <Sparkles className="w-3.5 h-3.5" />
-                  <span>Lanjutkan ke ChatZAP Studio</span>
+                  <span>Lanjutkan ke ChatZAP</span>
                   <ArrowRight className="w-3 h-3" />
                 </button>
 

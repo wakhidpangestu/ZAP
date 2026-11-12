@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveGeometricIntent } from "@/data/geometry-database";
+import { resolveGeometricIntent, buildResultFromSpec, validateGeometrySpec, looksLikeGeometryRequest, type GeometrySpec } from "@/data/geometry-database";
 import { getUserSecurityStatus, recordUserSecurityViolation } from "@/utils/security-vault";
 
 interface ActiveProblemContext {
@@ -62,12 +62,16 @@ interface HarnessContextResult {
   corpusReferences: CorpusReference[];
 }
 
-async function fetchHarnessMemoryContext(query: string): Promise<HarnessContextResult> {
+async function fetchHarnessMemoryContext(query: string, userId?: string): Promise<HarnessContextResult> {
   try {
+    const harnessSecret = process.env.ZAP_HARNESS_SECRET || "";
     const res = await fetch(`${API_BASE}/api/v1/harness/context`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: query.slice(0, 300), limit: 3 }),
+      headers: {
+        "Content-Type": "application/json",
+        ...(harnessSecret ? { "X-Harness-Secret": harnessSecret } : {}),
+      },
+      body: JSON.stringify({ query: query.slice(0, 300), limit: 3, user_id: userId || undefined }),
       signal: AbortSignal.timeout(1200),
     });
     if (res.ok) {
@@ -143,16 +147,22 @@ function validateCustomBaseUrl(raw: string): { ok: true; url: string } | { ok: f
 function recordTurnToAgentHarness(
   userMessage: string,
   assistantReply: string,
-  activeProblem?: ActiveProblemContext | null
+  activeProblem?: ActiveProblemContext | null,
+  userId?: string
 ): void {
+  const harnessSecret = process.env.ZAP_HARNESS_SECRET || "";
   void fetch(`${API_BASE}/api/v1/harness/learn`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(harnessSecret ? { "X-Harness-Secret": harnessSecret } : {}),
+    },
     body: JSON.stringify({
       user_message: userMessage.slice(0, 500),
       assistant_reply: assistantReply.slice(0, 600),
       explicit_steps: activeProblem?.steps || undefined,
       target_variable: activeProblem?.counterExample?.test_variable || "x",
+      user_id: userId || undefined,
     }),
     signal: AbortSignal.timeout(1500),
   }).catch(() => {
@@ -590,12 +600,111 @@ Jadikan konteks coretan di atas sebagai rujukan utama jika siswa bertanya tentan
   }
 
   if (workspaceMode === "read") {
-    prompt += `\n\nMODE WORKSPACE: READ-ONLY (Hanya lakukan bimbingan Sokratik dan verifikasi matematis tanpa menulis atau memodifikasi berkas workspace).`;
+    prompt += `\n\nMODE BACA SAJA: Hanya lakukan bimbingan Sokratik dan verifikasi matematis; jangan menyusun draf catatan atau rumus baru.`;
   } else {
-    prompt += `\n\nMODE WORKSPACE: WRITE (Anda berwenang mendraf berkas rumus, membuat skrip aljabar, dan memodifikasi catatan di workspace).`;
+    prompt += `\n\nMODE CATATAN: Anda boleh menyusun draf rumus dan catatan belajar di dalam percakapan ini. Jangan mengklaim telah menulis atau mengubah berkas apa pun di luar percakapan.`;
   }
 
   return prompt;
+}
+
+// ---------- Smartboard Self-Learning: pola tersimpan -> penalaran LLM -> validasi ----------
+async function geometryMatchFromBackend(query: string): Promise<{ spec: GeometrySpec; phrase: string } | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    const res = await fetch(`${API_BASE}/api/v1/harness/geometry-match`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data?.matched && data?.match?.spec) {
+      return { spec: data.match.spec as GeometrySpec, phrase: String(data.match.phrase || "") };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function learnGeometryPatternToBackend(phrase: string, spec: GeometrySpec): Promise<void> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    await fetch(`${API_BASE}/api/v1/harness/geometry-pattern`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Harness-Secret": process.env.ZAP_HARNESS_SECRET || "",
+      },
+      body: JSON.stringify({ phrase, spec }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+  } catch {
+    // Gagal belajar tidak boleh menggagalkan jawaban pengguna
+  }
+}
+
+async function extractGeometrySpecWithLLM(message: string, nvidiaKey: string): Promise<GeometrySpec | null> {
+  // Kandidat endpoint dibangun di bawah (platform LLM server lebih dulu);
+  // kunci NVIDIA per-pengguna hanya kandidat cadangan, bukan syarat masuk.
+  const prompt = `Kamu adalah parser intent geometri untuk Smartboard matematika. MIKIR dulu baik-baik: bangun apa sebenarnya yang diminta pengguna, dimensinya apa, parameternya apa. Sesudah menalar, keluarkan HANYA satu objek JSON (tanpa teks lain, tanpa markdown) dengan skema:
+{"family":"prisma"|"limas"|"poligon"|"entity"|"none","sides":<int atau null>,"entity_id":<string atau null>,"params":{"s":<angka atau null>,"t":<angka atau null>,"r":<angka atau null>,"p":<angka atau null>,"l":<angka atau null>},"reason":"<alasan singkat>"}
+Aturan keputusan:
+- "poligon" = bangun DATAR segi-n beraturan (2D). "prisma"/"limas" = bangun ruang 3D beralas segi-n beraturan; isi sides 3-12.
+- "entity" hanya untuk entity_id ini: kubus, balok, tabung, bola, kerucut, persegi, persegi_panjang, lingkaran, segitiga, jajar_genjang, trapesium, belah_ketupat, layang_layang.
+- Contoh menalar: "kayak piramida tapi alasnya lingkaran" itu kerucut -> family "entity", entity_id "kerucut". "bangun datar bersisi 8 sama panjang" -> family "poligon", sides 8. "menara segienam" -> family "prisma", sides 6.
+- Bangun yang tidak bisa dibangun mesin (torus/donat, frustum/terpancung, dodecahedron, setengah bola, gabungan bangun) -> family "none".
+- Parameter: s = sisi alas/rusuk, t = tinggi, r = jari-jari, p = panjang, l = lebar. Yang tidak disebut pengguna isi null.
+Pesan pengguna: "${message.replace(/"/g, "'")}"`;
+  const candidates: Array<{ base: string; model: string; key: string }> = [];
+  const platformBase = process.env.ZAP_PLATFORM_LLM_BASE_URL?.trim();
+  const platformModel = process.env.ZAP_PLATFORM_LLM_MODEL?.trim();
+  const platformKey = process.env.ZAP_PLATFORM_LLM_API_KEY?.trim();
+  if (platformBase && platformModel && platformKey) {
+    candidates.push({ base: platformBase.replace(/\/$/, ""), model: platformModel, key: platformKey });
+  }
+  if (nvidiaKey) {
+    candidates.push({ base: "https://integrate.api.nvidia.com/v1", model: "meta/llama-3.3-70b-instruct", key: nvidiaKey });
+    candidates.push({ base: "https://integrate.api.nvidia.com/v1", model: "nvidia/nemotron-3-nano-30b-a3b", key: nvidiaKey });
+  }
+  for (const cand of candidates) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 20000);
+      const res = await fetch(`${cand.base}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${cand.key}`,
+        },
+        body: JSON.stringify({
+          model: cand.model,
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.1,
+          max_tokens: 400,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const text: string = data?.choices?.[0]?.message?.content || "";
+      const start = text.indexOf("{");
+      const end = text.lastIndexOf("}");
+      if (start === -1 || end <= start) continue;
+      const parsed = JSON.parse(text.slice(start, end + 1)) as GeometrySpec;
+      if (parsed && typeof parsed.family === "string") return parsed;
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 async function handleChatPost(req: Request) {
@@ -695,7 +804,7 @@ async function handleChatPost(req: Request) {
     }
 
     // 0c. ZAP MODEL AGENT HARNESS: Ambil Memori Episodik & Rekam Pembelajaran Kontinu dari Percakapan
-    const harnessResult = await fetchHarnessMemoryContext(rawMessage);
+    const harnessResult = await fetchHarnessMemoryContext(rawMessage, identityKey || undefined);
     const harnessMemoryContext = harnessResult.promptInjection;
     if (harnessResult.corpusReferences.length > 0) {
       corpusRefsByRequest.set(req, harnessResult.corpusReferences);
@@ -707,7 +816,7 @@ async function handleChatPost(req: Request) {
       : rawActiveProblem;
     const previousAssistantTurn =
       conversationHistory?.slice().reverse().find((t) => t.role === "assistant")?.content || "";
-    recordTurnToAgentHarness(rawMessage, previousAssistantTurn, rawActiveProblem);
+    recordTurnToAgentHarness(rawMessage, previousAssistantTurn, rawActiveProblem, identityKey || undefined);
 
     let message = rawMessage;
     const textAttachments: Array<{ name: string; content: string }> = [];
@@ -771,13 +880,56 @@ async function handleChatPost(req: Request) {
     // Prioritas Khusus: Jika pengguna meminta visualisasi/pemodelan geometri 2D atau 3D
     // Layani secara deterministik via ZAP Universal Geometry & Spatial Engine (KaTeX rapi, konfirmasi smartboard tepat dimensi)
     const resolvedGeom = resolveGeometricIntent(rawMessage, conversationHistory);
-    if (resolvedGeom) {
+    if (resolvedGeom && !resolvedGeom.smartboardItem && resolvedGeom.clarifyKind !== "generic") {
+      // Pemrosesan intent menghasilkan klarifikasi (bukan render): balas tanpa membuka smartboard
+      return NextResponse.json({
+        reply: sanitizeZeroAnswer(resolvedGeom.reply),
+        model: "ChatZAP Geometry Engine",
+        source: "geometry-clarify",
+      });
+    }
+    if (resolvedGeom?.smartboardItem) {
       const engineName = resolvedGeom.dimension === "3D" ? "ChatZAP Spatial 3D Engine" : "ChatZAP Geometry Engine";
       return NextResponse.json({
         reply: sanitizeZeroAnswer(resolvedGeom.reply),
         model: engineName,
         source: resolvedGeom.dimension === "3D" ? "spatial-3d-engine" : "geometry-2d-engine",
         smartboardItem: resolvedGeom.smartboardItem,
+      });
+    }
+
+    // 0z. Smartboard Self-Learning: resolver deterministik tidak kenal polanya.
+    // Urutan: (1) pola yang sudah dipelajari, (2) LLM menalar spec terstruktur,
+    // (3) validator mesin memutuskan. Spec lolos -> dirender + DIPELAJARI.
+    // Spec gagal / bangun tak didukung -> klarifikasi jujur, tidak ada bangun pengganti.
+    if (!resolvedGeom?.smartboardItem && looksLikeGeometryRequest(rawMessage.toLowerCase())) {
+      const learned = await geometryMatchFromBackend(rawMessage);
+      const learnedResult = learned ? buildResultFromSpec(learned.spec) : null;
+      if (learned && learnedResult) {
+        return NextResponse.json({
+          reply: sanitizeZeroAnswer(`Pola ini sudah pernah dipelajari ChatZAP, jadi langsung dikenali tanpa menalar ulang.\n\n${learnedResult.reply}`),
+          model: "ChatZAP Geometry Engine",
+          source: "geometry-learned",
+          smartboardItem: learnedResult.smartboardItem,
+        });
+      }
+      const nvidiaKeyForGeom = nvidiaApiKey?.trim() || process.env.NVIDIA_API_KEY?.trim() || "";
+      const spec = await extractGeometrySpecWithLLM(rawMessage, nvidiaKeyForGeom);
+      const specError = validateGeometrySpec(spec);
+      const built = specError === null && spec ? buildResultFromSpec(spec) : null;
+      if (spec && built) {
+        await learnGeometryPatternToBackend(rawMessage, spec);
+        return NextResponse.json({
+          reply: sanitizeZeroAnswer(`Pesanmu saya proses dulu sebelum memutuskan: model menalar bangun yang kamu maksud, keputusannya lolos validasi mesin geometri, dan pola ini sekarang saya pelajari supaya lain kali langsung dikenali.\n\n${built.reply}`),
+          model: "ChatZAP Geometry Engine",
+          source: "geometry-llm-learned",
+          smartboardItem: built.smartboardItem,
+        });
+      }
+      return NextResponse.json({
+        reply: sanitizeZeroAnswer(`Pesanmu sudah saya proses, tetapi bangun itu belum bisa dibangun Smartboard secara tepat, jadi papannya tidak saya buka dengan bangun pengganti.\n\nYang bisa dibangun: prisma dan limas beralas segi 3-12 (misalnya \`buatin piramida segi enam dengan sisi 60 dan tinggi 120\`), bangun datar segi 3-12, kubus, balok, tabung, bola, kerucut, dan bangun datar standar. Sebutkan salah satunya ya.`),
+        model: "ChatZAP Geometry Engine",
+        source: "geometry-clarify",
       });
     }
 

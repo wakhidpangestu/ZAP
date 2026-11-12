@@ -262,7 +262,7 @@ function UnbanContent() {
 
       {/* Footer */}
       <footer className="relative z-10 py-6 text-center text-xs text-slate-600 dark:text-slate-400">
-        &copy; 2026 ChatZAP — Zero Answer Policy Socratic AI. Dilindungi Invarian CAS SymPy.
+        &copy; 2026 ChatZAP - Zero Answer Policy Socratic AI. Dilindungi Invarian CAS SymPy.
       </footer>
     </div>
   );

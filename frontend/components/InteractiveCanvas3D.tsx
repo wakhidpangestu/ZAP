@@ -27,9 +27,14 @@ import {
   Check,
   ZoomIn,
   ZoomOut,
+  Users,
+  Copy,
+  LogOut,
 } from "lucide-react";
 import { useTheme } from "@/utils/theme";
 import MathView from "@/components/MathView";
+import { Dock, DockItem, DockIcon, DockLabel } from "@/components/ui/dock";
+import { motion, AnimatePresence } from "framer-motion";
 import ZapLogo from "@/components/ZapLogo";
 
 export type MathModelType =
@@ -49,7 +54,7 @@ export type MathModelType =
   | "solids"
   | "surface";
 
-export type SolidKind = "kubus" | "balok" | "bola" | "kerucut" | "prisma" | "limas";
+export type SolidKind = "kubus" | "balok" | "bola" | "kerucut" | "prisma" | "prisma_segilima" | "prisma_segienam" | "prisma_poligon" | "limas" | "limas_poligon";
 
 export type PlaneShapeKind =
   | "jajar_genjang"
@@ -64,7 +69,10 @@ export type PlaneShapeKind =
   | "jaring_kubus"
   | "jaring_limas"
   | "jaring_balok"
-  | "jaring_tabung";
+  | "jaring_tabung"
+  | "segilima"
+  | "segienam"
+  | "poligon";
 
 export interface BoardFormulaItem {
   id: string;
@@ -74,6 +82,7 @@ export interface BoardFormulaItem {
   y: number; // percentage 0-100% dari tinggi kanvas
   color?: "default" | "amber" | "emerald" | "blue" | "rose" | "purple";
   fontSize?: "sm" | "base" | "lg" | "xl";
+  kind?: "math" | "text";
 }
 
 /**
@@ -117,6 +126,25 @@ export function autoFormatToLatex(input: string): string {
   s = s.replace(/!=/g, "\\neq");
 
   return s;
+}
+
+/**
+ * Deteksi apakah sebuah ketikan lebih mirip RUMUS daripada teks biasa.
+ * Dipakai alat Tulis di Kanvas: teks biasa tampil apa adanya (huruf tegak,
+ * spasi utuh), sedangkan rumus otomatis dirender KaTeX. Pengguna tetap bisa
+ * mengganti keputusan ini dari bilah aksi catatan (Jadikan KaTeX / Teks biasa).
+ */
+export function looksLikeMath(input: string): boolean {
+  const s = (input || "").trim();
+  if (!s) return false;
+  if (s.includes("\\")) return true; // sudah mengandung perintah LaTeX
+  if (/[²³≤≥≠×÷√πθ]/.test(s)) return true;
+  if (/\b(sin|cos|tan|log|ln|lim|sqrt|akar|frac|integral|turunan|theta|alpha|beta)\b/i.test(s)) return true;
+  if (/[=<>^_]/.test(s)) return true; // persamaan, pertidaksamaan, pangkat, subskrip
+  if (/\d/.test(s) && /[+\-*/]/.test(s)) return true; // angka dengan operator
+  if (/^[a-zA-Z]\s*\(/.test(s)) return true; // f(x) dan sejenisnya
+  if (/\b[a-zA-Z]\s*[-+]\s*\d/.test(s)) return true; // x + 3 dan sejenisnya
+  return false;
 }
 
 /**
@@ -215,6 +243,7 @@ interface InteractiveCanvas3DProps {
   isProjectorMode?: boolean;
   onToggleProjector?: () => void;
   onClose?: () => void;
+  collabName?: string;
 }
 
 const GRID_Y = -1.5;
@@ -227,8 +256,8 @@ function createCornerBracketGeometry(
   dx: number,
   dy: number,
   dz: number,
-  armLen = 0.28,
-  armThick = 0.038
+  armLen = 0.32,
+  armThick = 0.05
 ): THREE.BufferGeometry {
   const geoX = new THREE.BoxGeometry(armLen, armThick, armThick);
   geoX.translate((dx * armLen) / 2, 0, 0);
@@ -241,11 +270,13 @@ function createCornerBracketGeometry(
 
   const geoCorner = new THREE.BoxGeometry(armThick * 1.6, armThick * 1.6, armThick * 1.6);
 
-  const merged = BufferGeometryUtils.mergeGeometries([geoX, geoY, geoZ, geoCorner]);
+  const geoKnob = new THREE.SphereGeometry(0.062, 12, 12);
+  const merged = BufferGeometryUtils.mergeGeometries([geoX, geoY, geoZ, geoCorner, geoKnob]);
   geoX.dispose();
   geoY.dispose();
   geoZ.dispose();
   geoCorner.dispose();
+  geoKnob.dispose();
   return merged;
 }
 
@@ -319,7 +350,11 @@ const SOLID_LABELS: Record<SolidKind, string> = {
   bola: "Bola 3D",
   kerucut: "Kerucut 3D",
   prisma: "Prisma Segitiga 3D",
+  prisma_segilima: "Prisma Segilima 3D",
+  prisma_segienam: "Prisma Segienam 3D",
   limas: "Limas Segi Empat 3D (Piramida)",
+  prisma_poligon: "Prisma Poligon 3D",
+  limas_poligon: "Limas Poligon 3D (Piramida)",
 };
 
 // Quick formula suggestions
@@ -341,6 +376,10 @@ const SMART_PRESETS = [
   { label: "Kubus + Irisan", model: "solids" as MathModelType, solid: "kubus" as SolidKind, paramA: 10, unit: "cm", hasSlice: true, desc: "Kubus sisi 10 cm dengan bidang irisan" },
   { label: "Balok 10×6×4", model: "solids" as MathModelType, solid: "balok" as SolidKind, paramA: 10, paramB: 6, paramC: 4, unit: "cm", desc: "Balok ruang p×l×t" },
   { label: "Prisma Segitiga", model: "solids" as MathModelType, solid: "prisma" as SolidKind, paramA: 8, paramB: 10, unit: "cm", desc: "Prisma segitiga geometri ruang" },
+  { label: "Prisma Segilima", model: "solids" as MathModelType, solid: "prisma_segilima" as SolidKind, paramA: 8, paramB: 10, unit: "cm", desc: "Prisma segilima geometri ruang" },
+  { label: "Prisma Segienam", model: "solids" as MathModelType, solid: "prisma_segienam" as SolidKind, paramA: 8, paramB: 10, unit: "cm", desc: "Prisma segienam geometri ruang" },
+  { label: "Segilima 2D", model: "2d_shape" as MathModelType, planeShape: "segilima" as PlaneShapeKind, paramA: 10, unit: "cm", desc: "Segilima beraturan (pentagon) sisi s=10" },
+  { label: "Segienam 2D", model: "2d_shape" as MathModelType, planeShape: "segienam" as PlaneShapeKind, paramA: 10, unit: "cm", desc: "Segienam beraturan (heksagon) sisi s=10" },
   { label: "Piramida / Limas", model: "solids" as MathModelType, solid: "limas" as SolidKind, paramA: 8, paramB: 10, unit: "cm", desc: "Limas tegak segi empat (piramida) p×l×t" },
   { label: "Bola r=7", model: "solids" as MathModelType, solid: "bola" as SolidKind, paramA: 7, unit: "cm", desc: "Bola 3D jari-jari 7 cm" },
   { label: "Tabung r=7", model: "cylinder" as MathModelType, paramA: 7, paramB: 12, unit: "cm", desc: "Silinder ruang radius & tinggi" },
@@ -365,6 +404,7 @@ export default function InteractiveCanvas3D({
   isProjectorMode = false,
   onToggleProjector,
   onClose,
+  collabName = "Tamu",
 }: InteractiveCanvas3DProps) {
   // Main mode: "empty" | "2d_graph" | "3d_model"
   const [activeModel, setActiveModel] = useState<MathModelType>(initialModel);
@@ -436,12 +476,43 @@ export default function InteractiveCanvas3D({
 
   // Floating ZAP AI Copilot Assistant Widget State (Bottom-Right)
   const [isAiWidgetOpen, setIsAiWidgetOpen] = useState(false);
+  const [copilotSeen, setCopilotSeen] = useState(false);
   const [aiWidgetInput, setAiWidgetInput] = useState("");
   const [aiWidgetFeedback, setAiWidgetFeedback] = useState<string | null>(null);
 
   // On-Canvas Direct Typing & Selection State
   const [isTypingToolActive, setIsTypingToolActive] = useState(false);
   const [selectedFormulaId, setSelectedFormulaId] = useState<string | null>(null);
+  const selectedNote = formulaNotes.find((n) => n.id === selectedFormulaId) || null;
+  const selectedNoteIsMath = selectedNote
+    ? selectedNote.kind
+      ? selectedNote.kind === "math"
+      : looksLikeMath(selectedNote.rawText || selectedNote.latex)
+    : false;
+  const selectedDetected = selectedNote ? detectMathTransform(selectedNote.rawText || selectedNote.latex) : null;
+
+  // Kolaborasi realtime (papan bersama via WebSocket)
+  type CollabPeer = { id: string; name: string; color: string };
+  type CollabSeg = { kind?: string; x0?: number; y0?: number; x1?: number; y1?: number; color?: string; size?: number };
+  type CollabState = { model?: string; solid?: string; plane?: string; a?: number; b?: number; c?: number; unit?: string; slice?: boolean };
+  type CollabMsg = CollabState & { t?: string; id?: string; from?: string; color?: string; name?: string; x?: number; y?: number; peer?: CollabPeer; peers?: CollabPeer[]; strokes?: CollabSeg[]; notes?: BoardFormulaItem[]; state?: CollabState };
+  const [collabRoom, setCollabRoom] = useState<string | null>(null);
+  const [collabPeers, setCollabPeers] = useState<{ id: string; name: string; color: string }[]>([]);
+  const [myCollabId, setMyCollabId] = useState<string | null>(null);
+  const [myColor, setMyColor] = useState<string>("#f59e0b");
+  const [remoteCursors, setRemoteCursors] = useState<Record<string, { x: number; y: number; name: string; color: string; ts: number }>>({});
+  const [showSharePanel, setShowSharePanel] = useState(false);
+  const [joinCode, setJoinCode] = useState("");
+  const [shareCopied, setShareCopied] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const collabRoomRef = useRef<string | null>(null);
+  const myColorRef = useRef<string>("#f59e0b");
+  const applyingRemoteNotesRef = useRef(false);
+  const applyingRemoteStateRef = useRef(false);
+  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+  const syncReadyRef = useRef(false);
+  const collabHandlerRef = useRef<((msg: CollabMsg) => void) | null>(null);
+  const isTypingToolActiveRef = useRef<boolean>(false);
 
   // Inline On-Canvas Composer (creates/edits directly where clicked on the canvas)
   const [inlineComposer, setInlineComposer] = useState<{
@@ -474,6 +545,10 @@ export default function InteractiveCanvas3D({
 
   // Interactive corner handles for direct mouse drag resizing
   const cornerHandlesRef = useRef<THREE.Mesh[]>([]);
+  const draggingVisualRef = useRef<THREE.Mesh | null>(null);
+  const framingFactorRef = useRef(1);
+  const selectedSolidRef = useRef(false);
+  const selectionBoxRef = useRef<THREE.BoxHelper | null>(null);
   const isDraggingCornerRef = useRef<boolean>(false);
   const dragStartDataRef = useRef<{ clientX: number; clientY: number; initialParamA: number }>({
     clientX: 0,
@@ -591,6 +666,178 @@ export default function InteractiveCanvas3D({
     setHasDrawings(false);
   };
 
+  // =========================================================================
+  // KOLABORASI PAPAN REALTIME: coretan, catatan, bangun, dan kursor bersama
+  // =========================================================================
+  const collabSend = (obj: Record<string, unknown>) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try { ws.send(JSON.stringify(obj)); } catch { /* abaikan */ }
+    }
+  };
+
+  const clearBoardShared = () => {
+    clearDrawCanvas();
+    if (collabRoomRef.current) collabSend({ t: "clear" });
+  };
+
+  const drawRemoteSegment = (seg: CollabSeg) => {
+    const canvas = drawCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.save();
+    if (seg.kind === "erase") {
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.beginPath();
+      ctx.arc((seg.x1 ?? 0) * w, (seg.y1 ?? 0) * h, ((seg.size || 0.05) * w) / 2, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.globalCompositeOperation = "source-over";
+      ctx.strokeStyle = seg.color || "#f8fafc";
+      ctx.lineWidth = Math.max(1, (seg.size || 0.004) * w);
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo((seg.x0 ?? 0) * w, (seg.y0 ?? 0) * h);
+      ctx.lineTo((seg.x1 ?? 0) * w, (seg.y1 ?? 0) * h);
+      ctx.stroke();
+    }
+    ctx.restore();
+    setHasDrawings(true);
+  };
+
+  const applyRemoteState = (msg: CollabState) => {
+    applyingRemoteStateRef.current = true;
+    if (msg.model) selectModel(msg.model as MathModelType);
+    if (msg.solid) { setSolidKind(msg.solid as SolidKind); onSolidKindChange?.(msg.solid as SolidKind); }
+    if (msg.plane) { setPlaneShapeKind(msg.plane as PlaneShapeKind); onPlaneShapeChange?.(msg.plane as PlaneShapeKind); }
+    if (typeof msg.a === "number") setParamA(msg.a);
+    if (typeof msg.b === "number") setParamB(msg.b);
+    if (typeof msg.c === "number") setParamC(msg.c);
+    if (msg.unit) setUnit(msg.unit as string);
+    if (typeof msg.slice === "boolean") setShowSlicePlane(msg.slice);
+    // Samakan state halaman agar bila kanvas dirakit ulang (ganti bangun), nilai remote tidak tertimpa nilai lama
+    const a2 = typeof msg.a === "number" ? msg.a : paramARef.current;
+    const b2 = typeof msg.b === "number" ? msg.b : paramBRef.current;
+    const c2 = typeof msg.c === "number" ? msg.c : paramCRef.current;
+    onParamsChange?.(a2, b2, c2, msg.unit);
+    setTimeout(() => { applyingRemoteStateRef.current = false; }, 400);
+  };
+
+  const handleCollabMessage = (msg: CollabMsg) => {
+    if (!msg || typeof msg !== "object") return;
+    switch (msg.t) {
+      case "welcome": {
+        setMyCollabId(msg.id ?? null);
+        myColorRef.current = msg.color || "#f59e0b";
+        setMyColor(msg.color || "#f59e0b");
+        setCollabPeers(Array.isArray(msg.peers) ? msg.peers : []);
+        if (Array.isArray(msg.strokes)) msg.strokes.forEach((s) => drawRemoteSegment(s));
+        if (Array.isArray(msg.notes) && msg.notes.length > 0) {
+          applyingRemoteNotesRef.current = true;
+          setFormulaNotes(msg.notes);
+          setTimeout(() => { applyingRemoteNotesRef.current = false; }, 400);
+        }
+        if (msg.state) applyRemoteState(msg.state);
+        break;
+      }
+      case "join": {
+        if (msg.peer) setCollabPeers((prev) => [...prev.filter((p) => p.id !== msg.peer!.id), msg.peer!]);
+        // Anggota lama mendorong keadaan papan terkini agar pendatang langsung melihat bangun + catatan yang sama
+        setTimeout(() => {
+          if (collabRoomRef.current) {
+            collabSend({ t: "notes", notes: formulaNotes });
+            collabSend({ t: "state", model: activeModel, solid: solidKind, plane: planeShapeKind, a: paramA, b: paramB, c: paramC, unit, slice: showSlicePlane });
+          }
+        }, 350);
+        break;
+      }
+      case "leave": {
+        const lid = msg.id;
+        setCollabPeers((prev) => prev.filter((p) => p.id !== lid));
+        if (lid) setRemoteCursors((prev) => { const n = { ...prev }; delete n[lid]; return n; });
+        break;
+      }
+      case "seg":
+        drawRemoteSegment(msg);
+        break;
+      case "clear":
+        clearDrawCanvas();
+        break;
+      case "notes":
+        applyingRemoteNotesRef.current = true;
+        setFormulaNotes(msg.notes || []);
+        setTimeout(() => { applyingRemoteNotesRef.current = false; }, 400);
+        break;
+      case "state":
+        applyRemoteState(msg);
+        break;
+      case "cursor": {
+        const fid = msg.from;
+        if (fid) {
+          setRemoteCursors((prev) => ({
+            ...prev,
+            [fid]: { x: msg.x ?? 0, y: msg.y ?? 0, name: msg.name || "Tamu", color: msg.color || "#f59e0b", ts: Date.now() },
+          }));
+        }
+        break;
+      }
+    }
+  };
+  collabHandlerRef.current = handleCollabMessage;
+
+  const disconnectBoard = () => {
+    if (wsRef.current) {
+      try { wsRef.current.onclose = null; wsRef.current.close(); } catch { /* abaikan */ }
+      wsRef.current = null;
+    }
+    collabRoomRef.current = null;
+    setCollabRoom(null);
+    setCollabPeers([]);
+    setRemoteCursors({});
+    setMyCollabId(null);
+    try { sessionStorage.removeItem("zap_board_code"); } catch { /* abaikan */ }
+  };
+
+  const connectBoard = (roomRaw: string) => {
+    const room = roomRaw.trim().replace(/[^A-Za-z0-9_-]/g, "").slice(0, 24);
+    if (!room) return;
+    disconnectBoard();
+    const base = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+    const wsBase = base.replace(/^http/, "ws");
+    const name = (collabName || "Tamu").slice(0, 24);
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(`${wsBase}/api/v1/board/${room}?name=${encodeURIComponent(name)}`);
+    } catch { return; }
+    wsRef.current = ws;
+    collabRoomRef.current = room;
+    setCollabRoom(room);
+    try {
+      const u = new URL(window.location.href);
+      u.hash = `board=${room}`;
+      window.history.replaceState(null, "", u.toString());
+    } catch { /* abaikan */ }
+    ws.onmessage = (ev) => {
+      try { collabHandlerRef.current?.(JSON.parse(ev.data)); } catch { /* abaikan */ }
+    };
+    ws.onclose = () => {
+      if (wsRef.current === ws) {
+        wsRef.current = null;
+        collabRoomRef.current = null;
+        setCollabRoom(null);
+        setCollabPeers([]);
+        setRemoteCursors({});
+      }
+    };
+  };
+
+  const genBoardCode = () =>
+    Array.from({ length: 6 }, () => "ABCDEFGHJKMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 31)]).join("");
+
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawingToolActive) return;
     const canvas = drawCanvasRef.current;
@@ -624,6 +871,16 @@ export default function InteractiveCanvas3D({
     }
     ctx.restore();
     setHasDrawings(true);
+    lastPointRef.current = { x, y };
+    if (collabRoomRef.current) {
+      const rw = rect.width || 1;
+      const rh = rect.height || 1;
+      if (drawingMode === "pen") {
+        collabSend({ t: "seg", kind: "pen", x0: x / rw, y0: y / rh, x1: x / rw, y1: y / rh, color: drawColor, size: brushSize / rw });
+      } else {
+        collabSend({ t: "seg", kind: "erase", x1: x / rw, y1: y / rh, size: eraserSize / rw });
+      }
+    }
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -635,6 +892,16 @@ export default function InteractiveCanvas3D({
     setPointerPos({ x, y });
 
     if (!isDrawing || !isDrawingToolActive) return;
+    if (collabRoomRef.current && lastPointRef.current) {
+      const rw = rect.width || 1;
+      const rh = rect.height || 1;
+      if (drawingMode === "pen") {
+        collabSend({ t: "seg", kind: "pen", x0: lastPointRef.current.x / rw, y0: lastPointRef.current.y / rh, x1: x / rw, y1: y / rh, color: drawColor, size: brushSize / rw });
+      } else {
+        collabSend({ t: "seg", kind: "erase", x1: x / rw, y1: y / rh, size: eraserSize / rw });
+      }
+    }
+    lastPointRef.current = { x, y };
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
@@ -658,6 +925,7 @@ export default function InteractiveCanvas3D({
 
   const handlePointerUp = () => {
     setIsDrawing(false);
+    lastPointRef.current = null;
   };
 
   const handlePointerLeave = () => {
@@ -694,6 +962,84 @@ export default function InteractiveCanvas3D({
     observer.observe(parent);
     return () => observer.disconnect();
   }, []);
+
+  // Cerminkan status alat ketik ke ref untuk handler kanvas 3D
+  useEffect(() => {
+    isTypingToolActiveRef.current = isTypingToolActive;
+  }, [isTypingToolActive]);
+
+  // Sinkronisasi catatan rumus ke ruang kolaborasi
+  useEffect(() => {
+    if (!syncReadyRef.current || applyingRemoteNotesRef.current) return;
+    if (collabRoomRef.current) collabSend({ t: "notes", notes: formulaNotes });
+  }, [formulaNotes]);
+
+  // Sinkronisasi bangun + parameter ke ruang kolaborasi
+  useEffect(() => {
+    if (!syncReadyRef.current || applyingRemoteStateRef.current) return;
+    if (collabRoomRef.current) {
+      collabSend({ t: "state", model: activeModel, solid: solidKind, plane: planeShapeKind, a: paramA, b: paramB, c: paramC, unit, slice: showSlicePlane });
+    }
+  }, [activeModel, solidKind, planeShapeKind, paramA, paramB, paramC, unit, showSlicePlane]);
+
+  // Siapkan sinkronisasi, gabung otomatis dari tautan #board=KODE, bersihkan kursor basi
+  useEffect(() => {
+    syncReadyRef.current = true;
+    const m = window.location.hash.match(/board=([A-Za-z0-9_-]{3,24})/);
+    let code = m ? m[1] : undefined;
+    if (!code) {
+      try { code = sessionStorage.getItem("zap_board_code") || undefined; } catch { /* abaikan */ }
+    }
+    if (code) connectBoard(code);
+    const cursorTimer = window.setInterval(() => {
+      setRemoteCursors((prev) => {
+        const now = Date.now();
+        const keys = Object.keys(prev);
+        if (!keys.some((k) => now - prev[k].ts >= 4000)) return prev;
+        const next: typeof prev = {};
+        keys.forEach((k) => { if (now - prev[k].ts < 4000) next[k] = prev[k]; });
+        return next;
+      });
+    }, 2000);
+    return () => {
+      window.clearInterval(cursorTimer);
+      disconnectBoard();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Pancarkan posisi kursor sendiri ke kolaborator (maks ~20x/detik)
+  useEffect(() => {
+    const el = boardWorkspaceRef.current;
+    if (!el) return;
+    let last = 0;
+    const onMove = (e: PointerEvent) => {
+      if (!collabRoomRef.current) return;
+      const now = performance.now();
+      if (now - last < 50) return;
+      last = now;
+      const rect = el.getBoundingClientRect();
+      collabSend({ t: "cursor", x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height, name: collabName || "Tamu", color: myColorRef.current });
+    };
+    el.addEventListener("pointermove", onMove);
+    return () => el.removeEventListener("pointermove", onMove);
+  }, [collabName]);
+
+  // Keyboard untuk catatan terpilih: Delete menghapus, Esc melepas pilihan
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!selectedFormulaId || inlineComposer) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        handleDeleteFormula(selectedFormulaId);
+      }
+      if (e.key === "Escape") setSelectedFormulaId(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedFormulaId, inlineComposer]);
 
   // =========================================================================
   // 2. PARSE FORMULA OR TEXT QUERY -> AUTOMATIC 2D/3D GENERATION
@@ -827,6 +1173,28 @@ export default function InteractiveCanvas3D({
       return;
     }
 
+    if (/(segienam|segi enam|segi-6|hexagon|heksagon)/i.test(raw) && is2DRequested) {
+      const s = parsedA || 10;
+      setParamA(s);
+      setUnit(parsedUnit);
+      setPlaneShapeKind("segienam");
+      selectModel("2d_shape");
+      onPlaneShapeChange?.("segienam");
+      onParamsChange?.(s, paramB, paramC, parsedUnit);
+      return;
+    }
+
+    if (/(segilima|segi lima|segi-5|pentagon)/i.test(raw) && is2DRequested) {
+      const s = parsedA || 10;
+      setParamA(s);
+      setUnit(parsedUnit);
+      setPlaneShapeKind("segilima");
+      selectModel("2d_shape");
+      onPlaneShapeChange?.("segilima");
+      onParamsChange?.(s, paramB, paramC, parsedUnit);
+      return;
+    }
+
     if (raw.includes("persegi panjang") || raw.includes("persegipanjang") || raw.includes("rectangle")) {
       const numbers = (raw.match(/\d+(?:[.,]\d+)?/g) || []).map((m) => parseFloat(m.replace(",", ".")));
       const p = numbers[0] || 14;
@@ -932,6 +1300,65 @@ export default function InteractiveCanvas3D({
       return;
     }
 
+    // Ekstraksi jumlah sisi poligon dari teks mentah (dipakai semua cabang di bawah)
+    const segiN = (() => {
+      const d = raw.match(/(?:^|[^a-z])segi[\s-]?(\d{1,3})\b/i);
+      if (d) return parseInt(d[1], 10);
+      const named: Array<[RegExp, number]> = [
+        [/segitiga/, 3], [/segiempat/, 4], [/segilima/, 5], [/segienam/, 6],
+        [/segitujuh/, 7], [/segidelapan/, 8], [/segisembilan/, 9], [/segisepuluh/, 10],
+        [/\bhexagon\b|\bheksagon\b/, 6], [/\bpentagon\b/, 5], [/\boctagon\b|\boktagon\b/, 8], [/\bheptagon\b/, 7],
+      ];
+      for (const [re, n] of named) if (re.test(raw)) return n;
+      return null;
+    })();
+
+    // Keluarga LIMAS diproses PALING DULU: "piramida segi enam" adalah limas, bukan prisma segienam
+    if (raw.includes("limas") || raw.includes("piramida") || raw.includes("piramid") || raw.includes("pyramid")) {
+      const s = parsedA || 8;
+      const t = 10;
+      const n = segiN ?? 4;
+      setParamA(s);
+      setParamB(t);
+      setUnit(parsedUnit);
+      if (n === 4) {
+        setSolidKind("limas");
+        onParamsChange?.(s, t, paramC, parsedUnit);
+      } else {
+        setParamC(n);
+        setSolidKind("limas_poligon");
+        onParamsChange?.(s, t, n, parsedUnit);
+      }
+      setShowSlicePlane(wantsSlice);
+      selectModel("solids");
+      return;
+    }
+
+    if (segiN !== null) {
+      const p = parsedA || 8;
+      const t = 10;
+      setParamA(p);
+      setParamB(t);
+      setUnit(parsedUnit);
+      if (segiN === 5) {
+        setSolidKind("prisma_segilima");
+        onParamsChange?.(p, t, paramC, parsedUnit);
+      } else if (segiN === 6) {
+        setSolidKind("prisma_segienam");
+        onParamsChange?.(p, t, paramC, parsedUnit);
+      } else if (segiN === 3) {
+        setSolidKind("prisma");
+        onParamsChange?.(p, t, paramC, parsedUnit);
+      } else {
+        setParamC(segiN);
+        setSolidKind("prisma_poligon");
+        onParamsChange?.(p, t, segiN, parsedUnit);
+      }
+      setShowSlicePlane(wantsSlice);
+      selectModel("solids");
+      return;
+    }
+
     if (raw.includes("prisma") || raw.includes("prism")) {
       const p = parsedA || 8;
       const t = 10;
@@ -942,19 +1369,6 @@ export default function InteractiveCanvas3D({
       setShowSlicePlane(wantsSlice);
       selectModel("solids");
       onParamsChange?.(p, t, paramC, parsedUnit);
-      return;
-    }
-
-    if (raw.includes("limas") || raw.includes("piramida") || raw.includes("piramid") || raw.includes("pyramid")) {
-      const s = parsedA || 8;
-      const t = 10;
-      setParamA(s);
-      setParamB(t);
-      setUnit(parsedUnit);
-      setSolidKind("limas");
-      setShowSlicePlane(wantsSlice);
-      selectModel("solids");
-      onParamsChange?.(s, t, paramC, parsedUnit);
       return;
     }
 
@@ -1144,7 +1558,7 @@ export default function InteractiveCanvas3D({
       setFormulaNotes((prev) =>
         prev.map((item) =>
           item.id === inlineComposer.id
-            ? { ...item, latex: formattedLatex, rawText: raw }
+            ? { ...item, latex: formattedLatex, rawText: raw, kind: looksLikeMath(raw) ? "math" : "text" }
             : item
         )
       );
@@ -1159,6 +1573,7 @@ export default function InteractiveCanvas3D({
         y: Math.max(2, Math.min(80, inlineComposer.y)),
         color: "default",
         fontSize: "base",
+        kind: looksLikeMath(raw) ? "math" : "text",
       };
       setFormulaNotes((prev) => [...prev, newNote]);
       setSelectedFormulaId(newId);
@@ -1643,6 +2058,44 @@ export default function InteractiveCanvas3D({
           ctx.arc(vx, vy, 2, 0, Math.PI * 2);
           ctx.fill();
         });
+      } else if (planeShapeKind === "segilima" || planeShapeKind === "segienam" || planeShapeKind === "poligon") {
+        const s = paramA || 10;
+        const n = planeShapeKind === "segilima" ? 5 : planeShapeKind === "segienam" ? 6 : (paramC || 6);
+        const R = s / (2 * Math.sin(Math.PI / n));
+        const sc = Math.min((width * 0.62) / (2 * R), (height * 0.58) / (2 * R));
+        const Rpx = R * sc;
+        const verts: Array<[number, number]> = [];
+        for (let i = 0; i < n; i++) {
+          const ang = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+          verts.push([originX + Rpx * Math.cos(ang), originY + Rpx * Math.sin(ang)]);
+        }
+        ctx.fillStyle = isDark ? "rgba(16, 185, 129, 0.14)" : "rgba(16, 185, 129, 0.16)";
+        ctx.beginPath();
+        verts.forEach(([vx, vy], i) => (i === 0 ? ctx.moveTo(vx, vy) : ctx.lineTo(vx, vy)));
+        ctx.closePath();
+        ctx.fill();
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = isDark ? "#34d399" : "#059669";
+        ctx.stroke();
+
+        ctx.font = "bold 12px sans-serif";
+        ctx.fillStyle = isDark ? "#34d399" : "#047857";
+        ctx.textAlign = "center";
+        const [mx, my] = [(verts[0][0] + verts[1][0]) / 2, (verts[0][1] + verts[1][1]) / 2];
+        ctx.fillText(`sisi (s) = ${s} ${u}`, mx, my - 10);
+        ctx.textAlign = "left";
+
+        verts.forEach(([vx, vy]) => {
+          ctx.fillStyle = isDark ? "#34d399" : "#059669";
+          ctx.beginPath();
+          ctx.arc(vx, vy, 4.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#ffffff";
+          ctx.beginPath();
+          ctx.arc(vx, vy, 2, 0, Math.PI * 2);
+          ctx.fill();
+        });
+
       } else if (planeShapeKind === "lingkaran") {
         const r = paramA || 7;
         const sc = Math.min((width * 0.65) / (2 * r), (height * 0.6) / (2 * r));
@@ -2231,6 +2684,23 @@ export default function InteractiveCanvas3D({
             { label: "Panjang Diagonal", formula: "d = s√2", value: `${fmt(Number(diagonal.toFixed(2)))} ${u}` },
           ],
         };
+      } else if (planeShapeKind === "segilima" || planeShapeKind === "segienam" || planeShapeKind === "poligon") {
+        const s = paramA !== undefined ? paramA : 10;
+        const n = planeShapeKind === "segilima" ? 5 : planeShapeKind === "segienam" ? 6 : (paramC || 6);
+        const luas = (n * s * s) / (4 * Math.tan(Math.PI / n));
+        const keliling = n * s;
+        const apotema = s / (2 * Math.tan(Math.PI / n));
+        return {
+          volume: 0,
+          surface: luas,
+          rows: [
+            { label: "Panjang Sisi (s)", formula: "s", value: `${fmt(s)} ${u}` },
+            { label: `Luas ${n === 5 ? "Segilima" : n === 6 ? "Segienam" : `Segi-${n}`}`, formula: "L = n·s²/(4·tan(π/n))", value: `${fmt(luas)} ${u}²` },
+            { label: "Keliling", formula: `K = ${n}s`, value: `${fmt(keliling)} ${u}` },
+            { label: "Apotema", formula: "a = s/(2·tan(π/n))", value: `${fmt(apotema)} ${u}` },
+          ],
+        };
+
       } else if (planeShapeKind === "lingkaran") {
         const r = paramA !== undefined ? paramA : 7;
         const luas = Math.PI * r * r;
@@ -2412,6 +2882,31 @@ export default function InteractiveCanvas3D({
           ],
         };
       }
+      case "prisma_segilima":
+      case "prisma_segienam":
+      case "prisma_poligon": {
+        const s = A;
+        const h = B || Math.round(A * 1.25);
+        const n = solidKind === "prisma_segilima" ? 5 : solidKind === "prisma_segienam" ? 6 : (paramC || 6);
+        const luasAlas = (n * s * s) / (4 * Math.tan(Math.PI / n));
+        const kelilingAlas = n * s;
+        const luasSelimut = kelilingAlas * h;
+        const lp = 2 * luasAlas + luasSelimut;
+        const v = luasAlas * h;
+        const namaAlas = n === 5 ? "Segilima" : n === 6 ? "Segienam" : `Segi-${n}`;
+        return {
+          volume: v,
+          surface: lp,
+          rows: [
+            { label: `Sisi Alas ${namaAlas}`, formula: "s", value: `${fmt(s)} ${u}` },
+            { label: "Tinggi Prisma", formula: "t", value: `${fmt(h)} ${u}` },
+            { label: "Luas Alas", formula: "n·s²/(4·tan(π/n))", value: `${fmt(luasAlas)} ${u}²` },
+            { label: "Luas Permukaan", formula: `2·La + ${n}st`, value: `${fmt(lp)} ${u}²` },
+            { label: "Volume", formula: "La × t", value: `${fmt(v)} ${u}³` },
+          ],
+        };
+      }
+
       case "limas": {
         const s = A;
         const h = B || Math.round(A * 1.25);
@@ -2428,6 +2923,28 @@ export default function InteractiveCanvas3D({
             { label: "Tinggi Limas", formula: "t", value: `${fmt(h)} ${u}` },
             { label: "Luas Permukaan", formula: "s² + 4·(½s·hs)", value: `${fmt(lp)} ${u}²` },
             { label: "Volume", formula: "⅓ · s² · t", value: `${fmt(v)} ${u}³` },
+          ],
+        };
+      }
+      case "limas_poligon": {
+        const s = A;
+        const h = B || Math.round(A * 1.25);
+        const n = paramC || 6;
+        const luasAlas = (n * s * s) / (4 * Math.tan(Math.PI / n));
+        const apotema = s / (2 * Math.tan(Math.PI / n));
+        const tinggiSegitiga = Math.sqrt(h ** 2 + apotema ** 2);
+        const luasSelimut = (n * s * tinggiSegitiga) / 2;
+        const lp = luasAlas + luasSelimut;
+        const v = (1 / 3) * luasAlas * h;
+        return {
+          volume: v,
+          surface: lp,
+          rows: [
+            { label: `Sisi Alas Segi-${n}`, formula: "s", value: `${fmt(s)} ${u}` },
+            { label: "Tinggi Limas", formula: "t", value: `${fmt(h)} ${u}` },
+            { label: "Luas Alas", formula: "n·s²/(4·tan(π/n))", value: `${fmt(luasAlas)} ${u}²` },
+            { label: "Luas Permukaan", formula: "La + (n·s·ts)/2", value: `${fmt(lp)} ${u}²` },
+            { label: "Volume", formula: "⅓ · La · t", value: `${fmt(v)} ${u}³` },
           ],
         };
       }
@@ -2812,10 +3329,11 @@ export default function InteractiveCanvas3D({
         const dimT = createDimensionSprite(`t = ${tVal} ${u}`, isDark);
         dimT.position.set(0.38, coneH / 2 + GRID_Y, 0);
         group.add(dimT);
-      } else if (solidKind === "prisma") {
+      } else if (solidKind === "prisma" || solidKind === "prisma_segilima" || solidKind === "prisma_segienam" || solidKind === "prisma_poligon") {
+        const prismSides = solidKind === "prisma" ? 3 : solidKind === "prisma_segilima" ? 5 : solidKind === "prisma_segienam" ? 6 : (paramC || 6);
         const prismR = Math.max(1.2, Math.min(3.5, (paramA / 8) * 1.8));
         const prismH = Math.max(1.8, Math.min(5.0, ((paramB || 10) / 10) * 3.0));
-        geo = new THREE.CylinderGeometry(prismR, prismR, prismH, 3);
+        geo = new THREE.CylinderGeometry(prismR, prismR, prismH, prismSides);
         const mat = new THREE.MeshStandardMaterial({
           color: 0x0284c7,
           transparent: true,
@@ -2826,14 +3344,14 @@ export default function InteractiveCanvas3D({
         });
         const mesh = new THREE.Mesh(geo, mat);
         mesh.position.set(0, prismH / 2 + GRID_Y, 0);
-        mesh.rotation.y = Math.PI / 6;
+        mesh.rotation.y = prismSides === 3 ? Math.PI / 6 : Math.PI / prismSides;
         addEdges(mesh, geo, 0x38bdf8);
         group.add(mesh);
 
-        // 6 Corner handles with 3-Axis Angle Brackets (Sudut Siku)
+        // Corner handles with 3-Axis Angle Brackets (Sudut Siku) di tiap sudut alas/tutup
         cornerHandlesRef.current = [];
-        for (let i = 0; i < 3; i++) {
-          const angle = (i * 2 * Math.PI) / 3 + Math.PI / 6;
+        for (let i = 0; i < prismSides; i++) {
+          const angle = (i * 2 * Math.PI) / prismSides + (prismSides === 3 ? Math.PI / 6 : Math.PI / prismSides);
           const vx = prismR * Math.sin(angle);
           const vz = prismR * Math.cos(angle);
           const dx = -Math.sign(vx) || 1;
@@ -2851,7 +3369,7 @@ export default function InteractiveCanvas3D({
           const tGeo = createCornerBracketGeometry(dx, -1, dz, 0.22, 0.035);
           const tMesh = new THREE.Mesh(tGeo, bMat);
           tMesh.position.set(vx, prismH + GRID_Y, vz);
-          tMesh.userData = { isCornerHandle: true, index: i + 3 };
+          tMesh.userData = { isCornerHandle: true, index: i + prismSides };
           group.add(tMesh);
           cornerHandlesRef.current.push(tMesh);
         }
@@ -2861,11 +3379,15 @@ export default function InteractiveCanvas3D({
         const sVal = paramA || 8;
         const tVal = paramB || 10;
         const dimBase = createDimensionSprite(`s = ${sVal} ${u}`, isDark);
-        dimBase.position.set(0, GRID_Y + 0.14, prismR * 0.866 + 0.10);
+        dimBase.position.set(0, GRID_Y + 0.14, (prismSides === 3 ? prismR * 0.866 : prismR * Math.cos(Math.PI / prismSides)) + 0.10);
         group.add(dimBase);
 
         const dimHeight = createDimensionSprite(`t = ${tVal} ${u}`, isDark);
-        dimHeight.position.set(-prismR * 0.5 - 0.16, prismH / 2 + GRID_Y, prismR * 0.866);
+        if (prismSides === 3) {
+          dimHeight.position.set(-prismR * 0.5 - 0.16, prismH / 2 + GRID_Y, prismR * 0.866);
+        } else {
+          dimHeight.position.set(-prismR - 0.30, prismH / 2 + GRID_Y, 0);
+        }
         group.add(dimHeight);
 
         if (showSlicePlane) {
@@ -2977,6 +3499,67 @@ export default function InteractiveCanvas3D({
           addEdges(sliceMesh, sliceGeo, 0xffffff);
           group.add(sliceMesh);
         }
+      } else if (solidKind === "limas_poligon") {
+        const nSeg = paramC || 6;
+        const pyrR = Math.max(1.4, Math.min(3.8, (paramA / 8) * 2.0));
+        const pyrH = Math.max(1.8, Math.min(5.0, ((paramB || 10) / 10) * 3.0));
+        geo = new THREE.ConeGeometry(pyrR, pyrH, nSeg);
+        const mat = new THREE.MeshStandardMaterial({
+          color: 0x0284c7,
+          transparent: true,
+          opacity: wireframe ? 0.05 : 0.45,
+          roughness: 0.15,
+          metalness: 0.08,
+          depthWrite: false,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(0, pyrH / 2 + GRID_Y, 0);
+        mesh.rotation.y = Math.PI / nSeg;
+        addEdges(mesh, geo, 0x38bdf8);
+        group.add(mesh);
+
+        cornerHandlesRef.current = [];
+        const apexGeo = new THREE.ConeGeometry(0.12, 0.22, 4);
+        const apexMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x38bdf8, emissiveIntensity: 0.6 });
+        const apex = new THREE.Mesh(apexGeo, apexMat);
+        apex.position.set(0, pyrH + GRID_Y + 0.1, 0);
+        apex.userData = { isCornerHandle: true, index: 0 };
+        group.add(apex);
+        cornerHandlesRef.current.push(apex);
+
+        for (let i = 0; i < nSeg; i++) {
+          const angle = (i * 2 * Math.PI) / nSeg + Math.PI / nSeg;
+          const bx = pyrR * Math.sin(angle);
+          const bz = pyrR * Math.cos(angle);
+          const dx = -Math.sign(bx) || 1;
+          const dz = -Math.sign(bz) || 1;
+          const bGeo = createCornerBracketGeometry(dx, 1, dz, 0.24, 0.035);
+          const bMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x38bdf8, emissiveIntensity: 0.5 });
+          const bMesh = new THREE.Mesh(bGeo, bMat);
+          bMesh.position.set(bx, GRID_Y, bz);
+          bMesh.userData = { isCornerHandle: true, index: i + 1 };
+          group.add(bMesh);
+          cornerHandlesRef.current.push(bMesh);
+        }
+
+        const u = unit || "cm";
+        const sVal = paramA || 8;
+        const tVal = paramB || 10;
+        const frontEdgeZ = pyrR * Math.cos(Math.PI / nSeg);
+        const dimBase = createDimensionSprite(`s = ${sVal} ${u}`, isDark);
+        dimBase.position.set(0, GRID_Y + 0.14, frontEdgeZ + 0.10);
+        group.add(dimBase);
+
+        const pyrHPts = [new THREE.Vector3(0, GRID_Y, 0), new THREE.Vector3(0, pyrH + GRID_Y, 0)];
+        const pyrHGeo = new THREE.BufferGeometry().setFromPoints(pyrHPts);
+        const pyrHMat = new THREE.LineDashedMaterial({ color: 0x38bdf8, dashSize: 0.12, gapSize: 0.08 });
+        const pyrHLine = new THREE.Line(pyrHGeo, pyrHMat);
+        pyrHLine.computeLineDistances();
+        group.add(pyrHLine);
+
+        const dimHeight = createDimensionSprite(`t = ${tVal} ${u}`, isDark);
+        dimHeight.position.set(0.38, pyrH / 2 + GRID_Y, 0);
+        group.add(dimHeight);
       } else {
         geo = new THREE.BoxGeometry(2.5, 2.5, 2.5);
         const mat = new THREE.MeshStandardMaterial({
@@ -2990,6 +3573,24 @@ export default function InteractiveCanvas3D({
         addEdges(mesh, geo, 0x67e8f9);
         group.add(mesh);
       }
+    }
+
+    // Proxy sentuh tak terlihat di tiap bracket sudut: area tangkap tarik jauh lebih besar
+    if (cornerHandlesRef.current.length > 0) {
+      const proxies: THREE.Mesh[] = [];
+      cornerHandlesRef.current.forEach((bracket) => {
+        const parent = bracket.parent as THREE.Group | null;
+        if (!parent) return;
+        const proxy = new THREE.Mesh(
+          new THREE.BoxGeometry(0.5, 0.5, 0.5),
+          new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })
+        );
+        proxy.position.copy(bracket.position);
+        proxy.userData = { isCornerHandle: true, bracketRef: bracket };
+        parent.add(proxy);
+        proxies.push(proxy);
+      });
+      cornerHandlesRef.current = [...cornerHandlesRef.current, ...proxies];
     }
   }, [activeModel, solidKind, showSlicePlane, sliceProgress, wireframe, is3DModel, paramA, paramB, paramC, isDark, unit]);
 
@@ -3052,6 +3653,7 @@ export default function InteractiveCanvas3D({
     const animate = () => {
       animFrameIdRef.current = requestAnimationFrame(animate);
       controls.update();
+      if (selectionBoxRef.current && selectedSolidRef.current) selectionBoxRef.current.update();
       renderer.render(scene, camera);
     };
     animate();
@@ -3063,7 +3665,7 @@ export default function InteractiveCanvas3D({
       if (isDraggingCornerRef.current) {
         const dx = e.clientX - dragStartDataRef.current.clientX;
         const dy = e.clientY - dragStartDataRef.current.clientY;
-        const diff = (dx - dy) * 0.06;
+        const diff = (dx - dy) * 0.045;
         const newA = Math.max(1, Math.min(50, Math.round(dragStartDataRef.current.initialParamA + diff)));
         if (newA !== paramARef.current) {
           paramARef.current = newA;
@@ -3082,28 +3684,26 @@ export default function InteractiveCanvas3D({
       const intersects = raycasterRef.current.intersectObjects(cornerHandlesRef.current, false);
 
       if (intersects.length > 0) {
-        const hit = intersects[0].object as THREE.Mesh;
+        const hitObj = intersects[0].object as THREE.Mesh;
+        const hit = (hitObj.userData.bracketRef as THREE.Mesh) || hitObj;
         container.style.cursor = "nwse-resize";
         if (hoveredCornerRef.current !== hit) {
           if (hoveredCornerRef.current) {
             hoveredCornerRef.current.scale.set(1, 1, 1);
             const m = hoveredCornerRef.current.material as THREE.MeshStandardMaterial;
-            m.emissive.setHex(0x38bdf8);
-            m.emissiveIntensity = 0.4;
+            if (m && m.emissive) { m.emissive.setHex(0x38bdf8); m.emissiveIntensity = 0.4; }
           }
           hoveredCornerRef.current = hit;
           hit.scale.set(1.6, 1.6, 1.6);
           const m = hit.material as THREE.MeshStandardMaterial;
-          m.emissive.setHex(0xf43f5e);
-          m.emissiveIntensity = 0.9;
+          if (m && m.emissive) { m.emissive.setHex(0xf43f5e); m.emissiveIntensity = 0.9; }
         }
       } else {
         container.style.cursor = isDrawingToolActiveRef.current ? "crosshair" : "default";
         if (hoveredCornerRef.current) {
           hoveredCornerRef.current.scale.set(1, 1, 1);
           const m = hoveredCornerRef.current.material as THREE.MeshStandardMaterial;
-          m.emissive.setHex(0x38bdf8);
-          m.emissiveIntensity = 0.4;
+          if (m && m.emissive) { m.emissive.setHex(0x38bdf8); m.emissiveIntensity = 0.4; }
           hoveredCornerRef.current = null;
         }
       }
@@ -3125,6 +3725,12 @@ export default function InteractiveCanvas3D({
           clientY: e.clientY,
           initialParamA: paramARef.current,
         };
+        const hitObj = intersects[0].object as THREE.Mesh;
+        const visual = (hitObj.userData.bracketRef as THREE.Mesh) || hitObj;
+        draggingVisualRef.current = visual;
+        visual.scale.set(1.8, 1.8, 1.8);
+        const vm = visual.material as THREE.MeshStandardMaterial;
+        if (vm && vm.emissive) { vm.emissive.setHex(0xf43f5e); vm.emissiveIntensity = 1.15; }
         controls.enabled = false;
         container.style.cursor = "nwse-resize";
       }
@@ -3134,14 +3740,69 @@ export default function InteractiveCanvas3D({
       if (isDraggingCornerRef.current) {
         isDraggingCornerRef.current = false;
         controls.enabled = true;
+        if (draggingVisualRef.current) {
+          draggingVisualRef.current.scale.set(1, 1, 1);
+          const vm = draggingVisualRef.current.material as THREE.MeshStandardMaterial;
+          if (vm && vm.emissive) { vm.emissive.setHex(0x38bdf8); vm.emissiveIntensity = 0.5; }
+          draggingVisualRef.current = null;
+        }
         if (container) {
           container.style.cursor = isDrawingToolActiveRef.current ? "crosshair" : "default";
         }
       }
     };
 
+    // Klik objek 3D = terpilih (kotak penanda mengikuti bentuk); klik area kosong = lepas
+    const selectDownPos = { x: 0, y: 0 };
+    const onSelectDown = (e: PointerEvent) => {
+      selectDownPos.x = e.clientX;
+      selectDownPos.y = e.clientY;
+    };
+    const clearSelectionBox = () => {
+      if (selectionBoxRef.current) {
+        scene.remove(selectionBoxRef.current);
+        selectionBoxRef.current.geometry.dispose();
+        (selectionBoxRef.current.material as THREE.Material).dispose();
+        selectionBoxRef.current = null;
+      }
+      selectedSolidRef.current = false;
+    };
+    const onSelectUp = (e: PointerEvent) => {
+      if (isDraggingCornerRef.current || isDrawingToolActiveRef.current || isTypingToolActiveRef.current) return;
+      if (Math.hypot(e.clientX - selectDownPos.x, e.clientY - selectDownPos.y) > 6 || !container || !camera) return;
+      const rect = container.getBoundingClientRect();
+      if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
+      mouseVecRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouseVecRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      raycasterRef.current.setFromCamera(mouseVecRef.current, camera);
+      const group = meshGroupRef.current;
+      let hitSolid = false;
+      if (group) {
+        const hits = raycasterRef.current.intersectObjects(group.children, true);
+        hitSolid = hits.some((h) => {
+          const o = h.object as THREE.Mesh & { isSprite?: boolean; isLine?: boolean };
+          if (!o.isMesh || o.isSprite || o.isLine) return false;
+          if (o.userData && o.userData.isCornerHandle) return false;
+          const om = o.material as THREE.Material | undefined;
+          if (om && !Array.isArray(om) && om.transparent && om.opacity === 0) return false;
+          return true;
+        });
+      }
+      if (hitSolid && group) {
+        clearSelectionBox();
+        const box = new THREE.BoxHelper(group, new THREE.Color(myColorRef.current));
+        scene.add(box);
+        selectionBoxRef.current = box;
+        selectedSolidRef.current = true;
+      } else {
+        clearSelectionBox();
+      }
+    };
+
     container.addEventListener("pointermove", onPointerMove);
     container.addEventListener("pointerdown", onPointerDown);
+    container.addEventListener("pointerdown", onSelectDown);
+    window.addEventListener("pointerup", onSelectUp);
     window.addEventListener("pointerup", onPointerUp);
     window.addEventListener("pointercancel", onPointerUp);
 
@@ -3152,6 +3813,13 @@ export default function InteractiveCanvas3D({
       cameraRef.current.aspect = w / h;
       cameraRef.current.updateProjectionMatrix();
       rendererRef.current.setSize(w, h);
+      // Panel sempit: jauhkan kamera sedikit agar label dimensi tidak terpotong tepi kanvas
+      const f = w < 540 ? 1.3 : 1.0;
+      if (framingFactorRef.current !== f) {
+        const off = camera.position.clone().sub(controls.target).multiplyScalar(f / framingFactorRef.current);
+        camera.position.copy(controls.target).add(off);
+        framingFactorRef.current = f;
+      }
     };
     const observer = new ResizeObserver(handleResize);
     observer.observe(container);
@@ -3167,6 +3835,8 @@ export default function InteractiveCanvas3D({
       if (animFrameIdRef.current) cancelAnimationFrame(animFrameIdRef.current);
       container.removeEventListener("pointermove", onPointerMove);
       container.removeEventListener("pointerdown", onPointerDown);
+      container.removeEventListener("pointerdown", onSelectDown);
+      window.removeEventListener("pointerup", onSelectUp);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
       controls.dispose();
@@ -3346,9 +4016,9 @@ export default function InteractiveCanvas3D({
   // =========================================================================
   return (
     <div className={`relative w-full h-full flex flex-col dark:bg-[#080a0f] bg-slate-50 dark:text-zinc-100 text-slate-800 select-none overflow-hidden font-sans ${className}`}>
-      {/* 1. TOP HEADER & SMART COMMAND BAR (Zero Button Collision) */}
-      <div className="h-12 px-2.5 sm:px-4 border-b dark:border-white/[0.08] border-slate-200 dark:bg-[#0d0f17] bg-white flex items-center justify-between gap-1.5 sm:gap-2 shrink-0 z-20">
-        {/* Left: Mode Picker Segmented Buttons + Reset */}
+      {/* 1. TOP HEADER RAMPING: pemilih mode saja - semua ALAT pindah ke dock bawah (gaya Figma) */}
+      <div className="h-12 px-2.5 sm:px-4 border-b dark:border-white/[0.08] border-slate-200 dark:bg-[#0d0f17] bg-white flex items-center justify-between gap-1.5 sm:gap-2 shrink-0 z-[35]">
+        {/* Left: Mode Picker Segmented Buttons */}
         <div className="flex items-center gap-1.5 shrink-0">
           <div className="flex items-center dark:bg-white/[0.04] bg-slate-100 p-0.5 rounded-xl border dark:border-white/[0.08] border-slate-200">
             <button
@@ -3390,160 +4060,133 @@ export default function InteractiveCanvas3D({
             </button>
           </div>
 
-          {(activeModel !== "empty" || hasDrawings || formulaNotes.length > 0) && (
-            <button
-              type="button"
-              onClick={() => {
-                clearDrawCanvas();
-                setFormulaNotes([]);
-                setSelectedFormulaId(null);
-                setInlineComposer(null);
-                setIsTypingToolActive(false);
-                setIsDrawingToolActive(false);
-                setZoom2D(1);
-                setPan2D({ x: 0, y: 0 });
-                selectModel("empty");
-              }}
-              className="p-1.5 rounded-xl dark:bg-white/[0.04] bg-slate-100 hover:bg-slate-200 dark:hover:bg-white/[0.08] text-slate-500 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white border dark:border-white/[0.08] border-slate-200 transition cursor-pointer"
-              title="Reset / Bersihkan Seluruh Kanvas"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
-          )}
         </div>
 
-        {/* Center: Flexible Spacer (Komponen teks status di header telah dihapus sesuai permintaan) */}
         <div className="flex-1" />
 
-        {/* Right: Tools Cluster */}
+        {/* Right: Proyektor + Tutup saja */}
         <div className="flex items-center gap-1 shrink-0">
-          {/* Tombol Mode Ketik Langsung di Kanvas */}
-          <button
-            type="button"
-            onClick={() => {
-              if (isTypingToolActive) {
-                setIsTypingToolActive(false);
-              } else {
-                setIsTypingToolActive(true);
-                setIsDrawingToolActive(false);
-              }
-            }}
-            className={`p-1.5 px-2.5 rounded-xl text-xs flex items-center gap-1.5 transition cursor-pointer ${
-              isTypingToolActive
-                ? "bg-amber-500 text-white shadow-sm font-semibold"
-                : "dark:bg-white/[0.04] bg-slate-100 text-slate-700 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white border dark:border-white/[0.06] border-slate-200"
-            }`}
-            title="Mode Ketik di Kanvas (Klik di mana saja pada papan untuk mengetik rumus/teks)"
-          >
-            <Type className="w-3.5 h-3.5" />
-            <span className="text-[11px] font-mono font-medium hidden sm:inline">Ketik Rumus</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setIsTypingToolActive(false);
-              if (isDrawingToolActive && drawingMode === "pen") setIsDrawingToolActive(false);
-              else {
-                setIsDrawingToolActive(true);
-                setDrawingMode("pen");
-              }
-            }}
-            className={`p-1.5 rounded-xl text-xs transition cursor-pointer ${
-              isDrawingToolActive && drawingMode === "pen"
-                ? "bg-slate-900 text-white dark:bg-white dark:text-zinc-950 shadow-sm font-semibold"
-                : "dark:bg-white/[0.04] bg-slate-100 text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white border dark:border-white/[0.06] border-slate-200"
-            }`}
-            title="Pena Kapur Tulis"
-          >
-            <Pencil className="w-3.5 h-3.5" />
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              if (isDrawingToolActive && drawingMode === "eraser") setIsDrawingToolActive(false);
-              else {
-                setIsDrawingToolActive(true);
-                setDrawingMode("eraser");
-              }
-            }}
-            className={`p-1.5 rounded-xl text-xs transition cursor-pointer ${
-              isDrawingToolActive && drawingMode === "eraser"
-                ? "bg-slate-800 text-white shadow-sm font-semibold"
-                : "dark:bg-white/[0.04] bg-slate-100 text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white border dark:border-white/[0.06] border-slate-200"
-            }`}
-            title="Penghapus Kapur"
-          >
-            <Eraser className="w-3.5 h-3.5" />
-          </button>
-
-          {hasDrawings && (
+          {/* Bagikan Papan: kolaborasi realtime satu ruang */}
+          <div className="relative">
             <button
               type="button"
-              onClick={clearDrawCanvas}
-              className="p-1.5 rounded-xl dark:bg-white/[0.04] bg-slate-100 hover:bg-slate-200 dark:hover:bg-white/[0.08] text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white border dark:border-white/[0.06] border-slate-200 transition cursor-pointer"
-              title="Hapus Semua Coretan"
+              onClick={() => setShowSharePanel((v) => !v)}
+              className={`h-9 ${collabRoom ? "w-auto px-2.5" : "w-9"} flex items-center justify-center gap-1.5 rounded-xl border transition cursor-pointer ${
+                collabRoom
+                  ? "text-white border-transparent shadow-sm"
+                  : "dark:bg-white/[0.04] bg-slate-100 text-slate-500 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white dark:border-white/[0.06] border-slate-200"
+              }`}
+              style={collabRoom ? { background: myColor } : undefined}
+              title={collabRoom ? `Ruang ${collabRoom}: ${collabPeers.length} orang sedang di papan` : "Bagikan papan: gambar bareng teman secara realtime"}
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Users className="w-4 h-4" />
+              {collabRoom && <span className="text-[11px] font-bold">{collabPeers.length}</span>}
             </button>
-          )}
 
-          {is3DModel && (
-            <>
-              <button
-                type="button"
-                onClick={() => setWireframe(!wireframe)}
-                className={`p-1.5 rounded-xl text-xs transition border cursor-pointer ${
-                  wireframe
-                    ? "bg-slate-200 dark:bg-white/[0.16] text-slate-900 dark:text-white border-slate-300 dark:border-white/[0.2]"
-                    : "dark:bg-white/[0.04] bg-slate-100 text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white dark:border-white/[0.06] border-slate-200"
-                }`}
-                title="Toggle Wireframe Rangka Kawat"
-              >
-                <Layers className="w-3.5 h-3.5" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setAutoRotate(!autoRotate)}
-                className={`p-1.5 rounded-xl text-xs transition border cursor-pointer ${
-                  autoRotate
-                    ? "bg-slate-200 dark:bg-white/[0.16] text-slate-900 dark:text-white border-slate-300 dark:border-white/[0.2]"
-                    : "dark:bg-white/[0.04] bg-slate-100 text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white dark:border-white/[0.06] border-slate-200"
-                }`}
-                title="Toggle Rotasi Otomatis 360°"
-              >
-                <RotateCw className="w-3.5 h-3.5" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setIsHudVisible(!isHudVisible)}
-                className={`p-1.5 rounded-xl text-xs transition border cursor-pointer ${
-                  isHudVisible
-                    ? "bg-slate-200 dark:bg-white/[0.16] text-slate-900 dark:text-white border-slate-300 dark:border-white/[0.2]"
-                    : "dark:bg-white/[0.04] bg-slate-100 text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white dark:border-white/[0.06] border-slate-200"
-                }`}
-                title={isHudVisible ? "Sembunyikan Panel Kontrol Metrik" : "Tampilkan Panel Kontrol Metrik"}
-              >
-                {isHudVisible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-              </button>
-            </>
-          )}
+            {showSharePanel && (
+              <div className="absolute right-0 top-[calc(100%+8px)] w-72 max-w-[calc(100vw-2rem)] p-3.5 rounded-2xl liquid-glass-popup border border-slate-200 dark:border-white/10 shadow-2xl z-50 text-left animate-liquid-pop origin-top-right text-slate-800 dark:text-zinc-200">
+                {!collabRoom ? (
+                  <>
+                    <div className="text-xs font-semibold text-slate-900 dark:text-white">Gambar Bareng di Papan Ini</div>
+                    <p className="text-[11px] leading-relaxed text-slate-500 dark:text-zinc-400 mt-1">
+                      Buat ruang kolaborasi lalu bagikan kodenya ke teman. Coretan, catatan rumus, bangun 3D, dan kursor kalian terlihat realtime. Siapa pun yang punya kode bisa ikut menggambar.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => connectBoard(genBoardCode())}
+                      className="mt-2.5 w-full py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold transition cursor-pointer shadow-sm"
+                    >
+                      Buat Ruang Kolaborasi
+                    </button>
+                    <div className="flex items-center gap-2 my-2.5">
+                      <div className="flex-1 h-px bg-slate-200 dark:bg-white/10" />
+                      <span className="text-[10px] text-slate-400 dark:text-zinc-500">atau gabung pakai kode</span>
+                      <div className="flex-1 h-px bg-slate-200 dark:bg-white/10" />
+                    </div>
+                    <div className="flex gap-1.5">
+                      <input
+                        value={joinCode}
+                        onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                        placeholder="Kode ruang, mis. K7X2PQ"
+                        className="flex-1 min-w-0 px-2.5 py-2 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/10 text-xs font-mono uppercase placeholder:normal-case placeholder:font-sans focus:outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
+                      />
+                      <button
+                        type="button"
+                        disabled={!joinCode.trim()}
+                        onClick={() => { connectBoard(joinCode); setShowSharePanel(false); }}
+                        className="px-3 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-zinc-950 text-xs font-semibold disabled:opacity-40 transition cursor-pointer"
+                      >
+                        Gabung
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        Ruang {collabRoom}
+                      </div>
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-md text-white" style={{ background: myColor }}>
+                        warna kamu
+                      </span>
+                    </div>
+                    <div className="mt-2 space-y-1">
+                      {collabPeers.map((peer) => (
+                        <div key={peer.id} className="flex items-center gap-2 text-[11px] text-slate-600 dark:text-zinc-300">
+                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: peer.color }} />
+                          <span className="truncate">{peer.name}{peer.id === myCollabId ? " (kamu)" : ""}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        try {
+                          navigator.clipboard.writeText(`${window.location.origin}/chat#board=${collabRoom}`);
+                          setShareCopied(true);
+                          setTimeout(() => setShareCopied(false), 2000);
+                        } catch { /* abaikan */ }
+                      }}
+                      className="mt-3 w-full py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm"
+                    >
+                      {shareCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      {shareCopied ? "Tautan Tersalin" : "Salin Tautan Gabung"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        disconnectBoard();
+                        setShowSharePanel(false);
+                        try {
+                          const u = new URL(window.location.href);
+                          u.hash = "";
+                          window.history.replaceState(null, "", u.toString());
+                        } catch { /* abaikan */ }
+                      }}
+                      className="mt-1.5 w-full py-2 rounded-xl text-rose-600 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-500/10 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      Keluar Ruang
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
 
           {onToggleProjector && (
             <button
               type="button"
               onClick={onToggleProjector}
-              className={`p-1.5 rounded-xl border transition cursor-pointer ${
+              className={`h-9 w-9 flex items-center justify-center rounded-xl border transition cursor-pointer ${
                 isProjectorMode
                   ? "bg-slate-200 dark:bg-white/[0.16] text-slate-900 dark:text-white border-slate-300 dark:border-white/[0.2]"
-                  : "bg-white/[0.04] text-zinc-400 hover:text-white border-white/[0.06]"
+                  : "dark:bg-white/[0.04] bg-slate-100 text-slate-500 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white dark:border-white/[0.06] border-slate-200"
               }`}
               title="Mode Layar Proyektor"
             >
-              <Tv className="w-3.5 h-3.5" />
+              <Tv className="w-4 h-4" />
             </button>
           )}
 
@@ -3551,10 +4194,10 @@ export default function InteractiveCanvas3D({
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 rounded-xl bg-white/[0.04] hover:bg-slate-200 dark:hover:bg-white/[0.08] text-zinc-400 hover:text-white border border-white/[0.06] transition cursor-pointer"
+              className="h-9 w-9 flex items-center justify-center rounded-xl dark:bg-white/[0.04] bg-slate-100 hover:bg-slate-200 dark:hover:bg-white/[0.08] text-slate-500 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white border dark:border-white/[0.06] border-slate-200 transition cursor-pointer"
               title="Tutup Papan Tulis"
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-4 h-4" />
             </button>
           )}
         </div>
@@ -3599,7 +4242,7 @@ export default function InteractiveCanvas3D({
                   className="px-3.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-300/60 dark:border-amber-500/30 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
                 >
                   <Type className="w-3.5 h-3.5" />
-                  <span>Ketik Rumus di Kanvas</span>
+                  <span>Tulis di Kanvas</span>
                 </button>
                 <button
                   type="button"
@@ -3775,7 +4418,7 @@ export default function InteractiveCanvas3D({
 
         {/* 3D Geometry HUD Overlay Card (With Minimize/Hide Toggle) */}
         {activeModel === "3d_empty" && (
-          <div className="absolute top-3 right-3 p-3.5 rounded-2xl liquid-glass-popup z-20 text-xs w-64 space-y-2.5 text-slate-800 dark:text-zinc-200 animate-liquid-pop origin-top-right">
+          <div className="absolute top-3 right-3 max-sm:top-auto max-sm:bottom-[4.75rem] max-sm:left-3 max-sm:right-3 max-sm:w-auto p-3.5 rounded-2xl liquid-glass-popup z-20 text-xs w-64 space-y-2.5 text-slate-800 dark:text-zinc-200 animate-liquid-pop origin-top-right max-h-[calc(100%-6rem)] overflow-y-auto">
             <div className="flex items-center justify-between border-b dark:border-white/[0.08] border-slate-200/80 pb-2">
               <span className="font-semibold dark:text-white text-slate-900 flex items-center gap-1.5">
                 <Box className="w-3.5 h-3.5 text-slate-600 dark:text-zinc-300" />
@@ -3790,6 +4433,8 @@ export default function InteractiveCanvas3D({
                 { id: "kubus", label: "Kubus" },
                 { id: "balok", label: "Balok" },
                 { id: "prisma", label: "Prisma" },
+                { id: "prisma_segilima", label: "Prisma Segilima" },
+                { id: "prisma_segienam", label: "Prisma Segienam" },
                 { id: "limas", label: "Limas" },
                 { id: "tabung", label: "Tabung" },
                 { id: "bola", label: "Bola" },
@@ -3861,7 +4506,7 @@ export default function InteractiveCanvas3D({
               </button>
             </div>
           ) : (
-            <div className="absolute top-3 right-3 p-3.5 rounded-2xl liquid-glass-popup z-20 text-xs w-64 space-y-2.5 text-slate-800 dark:text-zinc-200 animate-liquid-pop origin-top-right">
+            <div className="absolute top-3 right-3 max-sm:top-auto max-sm:bottom-[4.75rem] max-sm:left-3 max-sm:right-3 max-sm:w-auto p-3.5 rounded-2xl liquid-glass-popup z-20 text-xs w-64 space-y-2.5 text-slate-800 dark:text-zinc-200 animate-liquid-pop origin-top-right max-h-[calc(100%-6rem)] overflow-y-auto">
               <div className="flex items-center justify-between border-b dark:border-white/[0.08] border-slate-200/80 pb-2">
                 <span className="font-semibold dark:text-white text-slate-900 flex items-center gap-1.5">
                   <Box className="w-3.5 h-3.5 text-slate-600 dark:text-zinc-300" />
@@ -4274,6 +4919,7 @@ export default function InteractiveCanvas3D({
         {formulaNotes.map((note) => {
           const isSelected = selectedFormulaId === note.id;
           const detected = detectMathTransform(note.rawText || note.latex);
+          const noteIsMath = note.kind ? note.kind === "math" : looksLikeMath(note.rawText || note.latex);
 
           return (
             <div
@@ -4307,7 +4953,7 @@ export default function InteractiveCanvas3D({
                 <>
                   <div
                     onClick={(e) => e.stopPropagation()}
-                    className="absolute -top-11 left-0 flex items-center gap-1 p-1 rounded-xl liquid-glass-popup border border-slate-200/90 dark:border-white/15 shadow-2xl z-30 animate-fadeIn whitespace-nowrap text-xs text-slate-800 dark:text-zinc-200"
+                    className={`absolute left-0 flex items-center gap-1 p-1 rounded-xl liquid-glass-popup border border-slate-200/90 dark:border-white/15 shadow-2xl z-30 animate-fadeIn whitespace-nowrap text-xs text-slate-800 dark:text-zinc-200 ${note.y < 18 ? "top-[calc(100%+10px)]" : "-top-11"}`}
                   >
                     {/* Transform to 2D Graph */}
                     {(detected === "graph" || note.latex.includes("x") || note.latex.includes("sin")) && (
@@ -4349,7 +4995,7 @@ export default function InteractiveCanvas3D({
                     )}
 
                     {/* Fallback buttons if type is not specifically detected */}
-                    {!detected && (
+                    {!detected && noteIsMath && (
                       <>
                         <button
                           type="button"
@@ -4366,6 +5012,42 @@ export default function InteractiveCanvas3D({
                           🧊 3D Solid
                         </button>
                       </>
+                    )}
+
+                    {/* Konversi teks <-> KaTeX (auto-detect saat catatan dipilih) */}
+                    {!noteIsMath && looksLikeMath(note.rawText || "") && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setFormulaNotes((prev) =>
+                            prev.map((n) =>
+                              n.id === note.id
+                                ? { ...n, kind: "math", latex: autoFormatToLatex(n.rawText || n.latex) }
+                                : n
+                            )
+                          )
+                        }
+                        className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-semibold flex items-center gap-1.5 shadow-xs transition cursor-pointer"
+                        title="Teks ini terbaca seperti rumus - tampilkan sebagai KaTeX"
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        <span>Jadikan KaTeX</span>
+                      </button>
+                    )}
+                    {noteIsMath && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setFormulaNotes((prev) =>
+                            prev.map((n) => (n.id === note.id ? { ...n, kind: "text" } : n))
+                          )
+                        }
+                        className="px-2 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.08] text-[11px] font-medium text-slate-600 dark:text-zinc-300 flex items-center gap-1 transition cursor-pointer"
+                        title="Tampilkan catatan ini sebagai teks biasa"
+                      >
+                        <Type className="w-3 h-3" />
+                        <span>Teks biasa</span>
+                      </button>
                     )}
 
                     <div className="w-[1px] h-4 bg-slate-200 dark:bg-white/10 mx-0.5" />
@@ -4399,10 +5081,10 @@ export default function InteractiveCanvas3D({
                   </div>
 
                   {/* 4 Corner Anchors for Active Selection (Matching Smartboard in Video) */}
-                  <span className="absolute -top-1.5 -left-1.5 w-3 h-3 rounded-full bg-amber-500 ring-2 ring-white dark:ring-[#080a0f] pointer-events-none" />
-                  <span className="absolute -top-1.5 -right-1.5 w-3 h-3 rounded-full bg-amber-500 ring-2 ring-white dark:ring-[#080a0f] pointer-events-none" />
-                  <span className="absolute -bottom-1.5 -left-1.5 w-3 h-3 rounded-full bg-amber-500 ring-2 ring-white dark:ring-[#080a0f] pointer-events-none" />
-                  <span className="absolute -bottom-1.5 -right-1.5 w-3 h-3 rounded-full bg-amber-500 ring-2 ring-white dark:ring-[#080a0f] pointer-events-none" />
+                  <span className="absolute -top-[7px] -left-[7px] w-3.5 h-3.5 rounded-[4px] bg-white border-2 border-amber-500 shadow pointer-events-none" />
+                  <span className="absolute -top-[7px] -right-[7px] w-3.5 h-3.5 rounded-[4px] bg-white border-2 border-amber-500 shadow pointer-events-none" />
+                  <span className="absolute -bottom-[7px] -left-[7px] w-3.5 h-3.5 rounded-[4px] bg-white border-2 border-amber-500 shadow pointer-events-none" />
+                  <span className="absolute -bottom-[7px] -right-[7px] w-3.5 h-3.5 rounded-[4px] bg-white border-2 border-amber-500 shadow pointer-events-none" />
                 </>
               )}
 
@@ -4414,7 +5096,7 @@ export default function InteractiveCanvas3D({
                   title="Tahan & geser untuk memindahkan posisi rumus di kanvas"
                 >
                   <Move className="w-3 h-3 text-slate-500 dark:text-zinc-400" />
-                  <span className="text-[9px] uppercase tracking-wider font-semibold">KaTeX</span>
+                  <span className="text-[9px] uppercase tracking-wider font-semibold">{noteIsMath ? "KaTeX" : "Teks"}</span>
                 </div>
                 <div className="flex items-center gap-1">
                   <button
@@ -4464,7 +5146,13 @@ export default function InteractiveCanvas3D({
                 }
                 title="Klik untuk memilih, atau klik dua kali untuk mengedit"
               >
-                <MathView math={note.latex} block />
+                {noteIsMath ? (
+                  <MathView math={note.latex} block />
+                ) : (
+                  <div className="whitespace-pre-wrap break-words leading-snug text-slate-800 dark:text-zinc-100">
+                    {note.rawText || note.latex}
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -4493,7 +5181,7 @@ export default function InteractiveCanvas3D({
             <div className="flex items-center justify-between pb-1.5 mb-2 border-b border-slate-100 dark:border-white/[0.08] text-[11px] font-medium text-slate-500 dark:text-zinc-400">
               <span className="flex items-center gap-1.5">
                 <Type className="w-3.5 h-3.5 text-amber-500" />
-                <span>Ketik Rumus di Kanvas</span>
+                <span>Tulis di Kanvas</span>
               </span>
               <div className="flex items-center gap-2">
                 <button
@@ -4517,17 +5205,21 @@ export default function InteractiveCanvas3D({
                 >
                   Simbol &amp; Palet ↗
                 </button>
-                <span className="text-[10px] text-slate-400">Otomatis KaTeX</span>
+                <span className="text-[10px] text-slate-400">Teks / KaTeX otomatis</span>
               </div>
             </div>
 
             {/* Live Auto-KaTeX Preview */}
             <div className="min-h-[36px] px-3 py-2 mb-2 rounded-xl bg-slate-100/90 dark:bg-black/40 border border-slate-200/80 dark:border-white/10 flex items-center justify-center text-sm font-medium overflow-x-auto text-slate-900 dark:text-white">
               {inlineComposer.text.trim() ? (
-                <MathView math={autoFormatToLatex(inlineComposer.text)} block={false} />
+                looksLikeMath(inlineComposer.text) ? (
+                  <MathView math={autoFormatToLatex(inlineComposer.text)} block={false} />
+                ) : (
+                  <span className="text-sm text-slate-800 dark:text-zinc-100">{inlineComposer.text}</span>
+                )
               ) : (
                 <span className="text-xs text-slate-400 dark:text-zinc-500 italic">
-                  Ketik rumus, misal: y = x^2 - 3, a^2 + b^2 = c^2, atau kubus 10cm...
+                  Tulis teks biasa, atau rumus seperti a^2 + b^2 = c^2 - rumus otomatis tampil sebagai KaTeX
                 </span>
               )}
             </div>
@@ -4546,8 +5238,8 @@ export default function InteractiveCanvas3D({
                     setInlineComposer(null);
                   }
                 }}
-                placeholder="Ketik rumus matematika..."
-                className="flex-1 bg-white dark:bg-[#121520] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:border-amber-500 transition shadow-inner"
+                placeholder="Tulis teks atau rumus, lalu Enter..."
+                className="flex-1 bg-white dark:bg-[#121520] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-amber-500 transition shadow-inner"
                 autoFocus
               />
               <button
@@ -4591,8 +5283,9 @@ export default function InteractiveCanvas3D({
                         AI
                       </span>
                     </div>
-                    <p className="text-[11px] text-slate-500 dark:text-zinc-400">
-                      Sintesis bangun ruang & rumus instan
+                    <p className="text-[11px] text-slate-500 dark:text-zinc-400 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                      Siap - sintesis bangun ruang &amp; rumus instan
                     </p>
                   </div>
                 </div>
@@ -4634,7 +5327,7 @@ export default function InteractiveCanvas3D({
                         setAiWidgetInput(chip.query);
                         triggerAiSynthesize(chip.query);
                       }}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-50 hover:bg-amber-500/10 dark:bg-white/[0.04] dark:hover:bg-amber-400/10 border border-slate-200/80 hover:border-amber-400/40 dark:border-white/[0.08] dark:hover:border-amber-400/30 text-[11px] font-medium text-slate-700 hover:text-amber-700 dark:text-zinc-300 dark:hover:text-amber-300 transition-all duration-150 text-left truncate cursor-pointer shadow-2xs group"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-50 hover:bg-amber-500/10 dark:bg-white/[0.04] dark:hover:bg-amber-400/10 border border-slate-200/80 hover:border-amber-400/40 dark:border-white/[0.08] dark:hover:border-amber-400/30 text-[11px] font-medium text-slate-700 hover:text-amber-700 dark:text-zinc-300 dark:hover:text-amber-300 transition-all duration-150 hover:-translate-y-px active:translate-y-0 text-left truncate cursor-pointer shadow-2xs group"
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-zinc-600 group-hover:bg-amber-500 transition-colors shrink-0" />
                       <span className="truncate">{chip.label}</span>
@@ -4657,7 +5350,7 @@ export default function InteractiveCanvas3D({
                     value={aiWidgetInput}
                     onChange={(e) => setAiWidgetInput(e.target.value)}
                     placeholder="Misal: prisma segitiga 10cm, kubus, tabung..."
-                    className="w-full bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/10 rounded-xl pl-3 pr-10 py-2.5 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-amber-500 dark:focus:border-amber-400 focus:ring-2 focus:ring-amber-500/20 transition shadow-inner"
+                    className="w-full bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/10 rounded-full pl-4 pr-11 py-2.5 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-amber-500 dark:focus:border-amber-400 focus:ring-2 focus:ring-amber-500/20 transition shadow-inner"
                     autoFocus
                   />
                   <button
@@ -4670,20 +5363,30 @@ export default function InteractiveCanvas3D({
                   </button>
                 </div>
                 {aiWidgetFeedback && (
-                  <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1.5 animate-fadeIn">
-                    <Check className="w-3.5 h-3.5" />
+                  <div className="text-[11px] text-emerald-700 dark:text-emerald-300 font-medium flex items-center gap-1.5 animate-fadeIn bg-emerald-500/10 border border-emerald-500/25 rounded-xl px-2.5 py-2">
+                    <Check className="w-3.5 h-3.5 shrink-0" />
                     <span>{aiWidgetFeedback}</span>
                   </div>
                 )}
+                <p className="text-[10px] text-slate-400 dark:text-zinc-500 leading-relaxed">
+                  Enter untuk membuat. Permintaan ditafsirkan dulu, lalu mesin geometri yang memutuskan bangun akhirnya - tidak asal menggambar.
+                </p>
               </form>
             </div>
           ) : (
             <button
               type="button"
-              onClick={() => setIsAiWidgetOpen(true)}
+              onClick={() => { setIsAiWidgetOpen(true); setCopilotSeen(true); }}
               className="group relative flex items-center h-12 w-12 hover:w-auto hover:pr-4.5 rounded-full bg-white/40 dark:bg-black/40 backdrop-blur-2xl border border-white/60 dark:border-white/20 shadow-2xl transition-all duration-300 ease-out cursor-pointer active:scale-95 overflow-hidden hover:border-amber-400/50 hover:shadow-amber-500/20"
               title="Buka ZAP AI Copilot untuk membuat bangun 2D/3D & rumus"
             >
+              {/* Badge penarik perhatian sampai copilot pertama kali dibuka */}
+              {!copilotSeen && (
+                <span className="absolute top-0 right-0 flex h-3.5 w-3.5 z-10">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-amber-500 border-2 border-white dark:border-zinc-900" />
+                </span>
+              )}
               {/* Symmetrically Centered 48px Icon Footprint (Zero Displacement on Hover) */}
               <div className="w-12 h-12 flex items-center justify-center shrink-0">
                 <div className="w-9 h-9 rounded-full bg-amber-500/20 dark:bg-amber-400/25 border border-amber-500/40 dark:border-amber-400/40 flex items-center justify-center text-amber-500 dark:text-amber-400 shadow-inner group-hover:scale-110 transition-transform">
@@ -4702,6 +5405,316 @@ export default function InteractiveCanvas3D({
               </div>
             </button>
           )}
+        </div>
+
+        {/* Kursor kolaborator (gaya Figma: panah berwarna + label nama) */}
+        {Object.entries(remoteCursors).map(([pid, c]) => (
+          <div
+            key={pid}
+            className="absolute z-40 pointer-events-none"
+            style={{ left: `${c.x * 100}%`, top: `${c.y * 100}%`, transition: "left 70ms linear, top 70ms linear" }}
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.35))" }}>
+              <path d="M4 2 L20 11.5 L12.2 13.2 L9.2 21 Z" fill={c.color} stroke="#ffffff" strokeWidth="1.4" />
+            </svg>
+            <span className="absolute left-3.5 top-3.5 px-1.5 py-0.5 rounded-md text-[10px] font-semibold text-white whitespace-nowrap shadow" style={{ background: c.color }}>
+              {c.name}
+            </span>
+          </div>
+        ))}
+
+        {/* DOCK ALAT BAWAH: dock magnifikasi (framer-motion) + aksi dinamis sesuai konteks seleksi */}
+        <div className="absolute bottom-2 left-3 sm:left-1/2 sm:-translate-x-1/2 z-30 max-w-[calc(100%-4.75rem)] sm:max-w-[calc(100%-2rem)]">
+          <Dock
+            className="items-end pb-2 gap-1.5 sm:gap-2 px-2.5 liquid-glass-popup border border-slate-200 dark:border-white/10 shadow-xl rounded-[26px]"
+            panelHeight={58}
+            magnification={70}
+            distance={110}
+          >
+            {/* Ketik Rumus / Teks */}
+            <DockItem
+              className={`aspect-square rounded-full border ${
+                isTypingToolActive
+                  ? "bg-amber-500 text-white border-amber-400 shadow-lg shadow-amber-500/30"
+                  : "bg-slate-100/90 dark:bg-white/[0.07] text-slate-700 dark:text-zinc-200 border-slate-200/70 dark:border-white/[0.08]"
+              }`}
+            >
+              <DockLabel>{isTypingToolActive ? "Mode Ketik Aktif" : "Ketik Rumus / Teks"}</DockLabel>
+              <DockIcon>
+                <Type className="w-full h-full" />
+                <button
+                  type="button"
+                  aria-label="Ketik Rumus / Teks"
+                  onClick={() => {
+                    if (isTypingToolActive) {
+                      setIsTypingToolActive(false);
+                    } else {
+                      setIsTypingToolActive(true);
+                      setIsDrawingToolActive(false);
+                    }
+                  }}
+                  className="absolute inset-0 rounded-full cursor-pointer"
+                />
+              </DockIcon>
+            </DockItem>
+
+            {/* Pena */}
+            <DockItem
+              className={`aspect-square rounded-full border ${
+                isDrawingToolActive && drawingMode === "pen"
+                  ? "bg-slate-900 dark:bg-white text-white dark:text-zinc-900 border-slate-900 dark:border-white shadow-md"
+                  : "bg-slate-100/90 dark:bg-white/[0.07] text-slate-600 dark:text-zinc-300 border-slate-200/70 dark:border-white/[0.08]"
+              }`}
+            >
+              <DockLabel>Pena Kapur</DockLabel>
+              <DockIcon>
+                <Pencil className="w-full h-full" />
+                <button
+                  type="button"
+                  aria-label="Pena Kapur"
+                  onClick={() => {
+                    setIsTypingToolActive(false);
+                    if (isDrawingToolActive && drawingMode === "pen") setIsDrawingToolActive(false);
+                    else {
+                      setIsDrawingToolActive(true);
+                      setDrawingMode("pen");
+                    }
+                  }}
+                  className="absolute inset-0 rounded-full cursor-pointer"
+                />
+              </DockIcon>
+            </DockItem>
+
+            {/* Penghapus */}
+            <DockItem
+              className={`aspect-square rounded-full border ${
+                isDrawingToolActive && drawingMode === "eraser"
+                  ? "bg-slate-700 text-white border-slate-600 shadow-md"
+                  : "bg-slate-100/90 dark:bg-white/[0.07] text-slate-600 dark:text-zinc-300 border-slate-200/70 dark:border-white/[0.08]"
+              }`}
+            >
+              <DockLabel>Penghapus Kapur</DockLabel>
+              <DockIcon>
+                <Eraser className="w-full h-full" />
+                <button
+                  type="button"
+                  aria-label="Penghapus Kapur"
+                  onClick={() => {
+                    if (isDrawingToolActive && drawingMode === "eraser") setIsDrawingToolActive(false);
+                    else {
+                      setIsDrawingToolActive(true);
+                      setDrawingMode("eraser");
+                    }
+                  }}
+                  className="absolute inset-0 rounded-full cursor-pointer"
+                />
+              </DockIcon>
+            </DockItem>
+
+            {/* Hapus coretan (dinamis: hanya saat ada coretan) */}
+            {hasDrawings && (
+              <DockItem className="aspect-square rounded-full border bg-slate-100/90 dark:bg-white/[0.07] text-slate-600 dark:text-zinc-300 border-slate-200/70 dark:border-white/[0.08]">
+                <DockLabel>Hapus Semua Coretan</DockLabel>
+                <DockIcon>
+                  <Trash2 className="w-full h-full" />
+                  <button
+                    type="button"
+                    aria-label="Hapus Semua Coretan"
+                    onClick={clearBoardShared}
+                    className="absolute inset-0 rounded-full cursor-pointer"
+                  />
+                </DockIcon>
+              </DockItem>
+            )}
+
+            {/* Grup 3D (dinamis: hanya saat model 3D aktif) */}
+            {is3DModel && (
+              <>
+                <div className="w-px h-8 bg-slate-300/70 dark:bg-white/10 mx-0.5 self-center shrink-0" />
+                <DockItem
+                  className={`aspect-square rounded-full border ${
+                    wireframe
+                      ? "bg-slate-300 dark:bg-white/[0.18] text-slate-900 dark:text-white border-slate-400/50 dark:border-white/20"
+                      : "bg-slate-100/90 dark:bg-white/[0.07] text-slate-600 dark:text-zinc-300 border-slate-200/70 dark:border-white/[0.08]"
+                  }`}
+                >
+                  <DockLabel>Wireframe</DockLabel>
+                  <DockIcon>
+                    <Layers className="w-full h-full" />
+                    <button
+                      type="button"
+                      aria-label="Toggle Wireframe"
+                      onClick={() => setWireframe(!wireframe)}
+                      className="absolute inset-0 rounded-full cursor-pointer"
+                    />
+                  </DockIcon>
+                </DockItem>
+                <DockItem
+                  className={`aspect-square rounded-full border ${
+                    autoRotate
+                      ? "bg-slate-300 dark:bg-white/[0.18] text-slate-900 dark:text-white border-slate-400/50 dark:border-white/20"
+                      : "bg-slate-100/90 dark:bg-white/[0.07] text-slate-600 dark:text-zinc-300 border-slate-200/70 dark:border-white/[0.08]"
+                  }`}
+                >
+                  <DockLabel>Rotasi Otomatis</DockLabel>
+                  <DockIcon>
+                    <RotateCw className="w-full h-full" />
+                    <button
+                      type="button"
+                      aria-label="Toggle Rotasi Otomatis"
+                      onClick={() => setAutoRotate(!autoRotate)}
+                      className="absolute inset-0 rounded-full cursor-pointer"
+                    />
+                  </DockIcon>
+                </DockItem>
+                <DockItem
+                  className={`aspect-square rounded-full border ${
+                    isHudVisible
+                      ? "bg-slate-300 dark:bg-white/[0.18] text-slate-900 dark:text-white border-slate-400/50 dark:border-white/20"
+                      : "bg-slate-100/90 dark:bg-white/[0.07] text-slate-600 dark:text-zinc-300 border-slate-200/70 dark:border-white/[0.08]"
+                  }`}
+                >
+                  <DockLabel>{isHudVisible ? "Sembunyikan Panel Metrik" : "Tampilkan Panel Metrik"}</DockLabel>
+                  <DockIcon>
+                    {isHudVisible ? <Eye className="w-full h-full" /> : <EyeOff className="w-full h-full" />}
+                    <button
+                      type="button"
+                      aria-label="Toggle Panel Metrik"
+                      onClick={() => setIsHudVisible(!isHudVisible)}
+                      className="absolute inset-0 rounded-full cursor-pointer"
+                    />
+                  </DockIcon>
+                </DockItem>
+              </>
+            )}
+
+            {/* AKSI DINAMIS: muncul saat ada catatan terpilih */}
+            <AnimatePresence>
+              {selectedNote && (
+                <motion.div
+                  key="dock-note-actions"
+                  className="flex items-center gap-1.5 sm:gap-2"
+                  initial={{ opacity: 0, scale: 0.6 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.6 }}
+                  transition={{ duration: 0.18 }}
+                >
+                  <div className="w-px h-8 bg-amber-400/60 mx-0.5 self-center shrink-0" />
+                  {(selectedDetected === "graph" ||
+                    selectedNote.latex.includes("x") ||
+                    selectedNote.latex.includes("sin") ||
+                    (!selectedDetected && selectedNoteIsMath)) && (
+                    <DockItem className="aspect-square rounded-full border bg-blue-500/15 text-blue-600 dark:text-blue-300 border-blue-500/30">
+                      <DockLabel>Ubah ke Grafik 2D</DockLabel>
+                      <DockIcon>
+                        <Sparkles className="w-full h-full" />
+                        <button
+                          type="button"
+                          aria-label="Ubah ke Grafik 2D"
+                          onClick={() => handleTransformToGraph(selectedNote.rawText || selectedNote.latex)}
+                          className="absolute inset-0 rounded-full cursor-pointer"
+                        />
+                      </DockIcon>
+                    </DockItem>
+                  )}
+                  {(selectedDetected === "3d" ||
+                    /kubus|prisma|limas|balok|bola|tabung/i.test(selectedNote.rawText || "") ||
+                    (!selectedDetected && selectedNoteIsMath)) && (
+                    <DockItem className="aspect-square rounded-full border bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 border-emerald-500/30">
+                      <DockLabel>Ubah ke Model 3D</DockLabel>
+                      <DockIcon>
+                        <Box className="w-full h-full" />
+                        <button
+                          type="button"
+                          aria-label="Ubah ke Model 3D"
+                          onClick={() => handleTransformTo3D(selectedNote.rawText || selectedNote.latex)}
+                          className="absolute inset-0 rounded-full cursor-pointer"
+                        />
+                      </DockIcon>
+                    </DockItem>
+                  )}
+                  {(selectedDetected === "2d_shape" ||
+                    /jaring|persegi|segitiga|lingkaran/i.test(selectedNote.rawText || "")) && (
+                    <DockItem className="aspect-square rounded-full border bg-purple-500/15 text-purple-600 dark:text-purple-300 border-purple-500/30">
+                      <DockLabel>Ubah ke Diagram 2D</DockLabel>
+                      <DockIcon>
+                        <Layers className="w-full h-full" />
+                        <button
+                          type="button"
+                          aria-label="Ubah ke Diagram 2D"
+                          onClick={() => handleTransformTo2D(selectedNote.rawText || selectedNote.latex)}
+                          className="absolute inset-0 rounded-full cursor-pointer"
+                        />
+                      </DockIcon>
+                    </DockItem>
+                  )}
+                  <DockItem className="aspect-square rounded-full border bg-amber-500/15 text-amber-600 dark:text-amber-300 border-amber-500/30">
+                    <DockLabel>{selectedNoteIsMath ? "Jadikan Teks Biasa" : "Jadikan KaTeX"}</DockLabel>
+                    <DockIcon>
+                      <Type className="w-full h-full" />
+                      <button
+                        type="button"
+                        aria-label={selectedNoteIsMath ? "Jadikan Teks Biasa" : "Jadikan KaTeX"}
+                        onClick={() =>
+                          setFormulaNotes((prev) =>
+                            prev.map((n) =>
+                              n.id === selectedNote.id
+                                ? selectedNoteIsMath
+                                  ? { ...n, kind: "text" }
+                                  : { ...n, kind: "math", latex: autoFormatToLatex(n.rawText || n.latex) }
+                                : n
+                            )
+                          )
+                        }
+                        className="absolute inset-0 rounded-full cursor-pointer"
+                      />
+                    </DockIcon>
+                  </DockItem>
+                  <DockItem className="aspect-square rounded-full border bg-rose-500/15 text-rose-600 dark:text-rose-300 border-rose-500/30">
+                    <DockLabel>Hapus Catatan</DockLabel>
+                    <DockIcon>
+                      <Trash2 className="w-full h-full" />
+                      <button
+                        type="button"
+                        aria-label="Hapus Catatan"
+                        onClick={() => handleDeleteFormula(selectedNote.id)}
+                        className="absolute inset-0 rounded-full cursor-pointer"
+                      />
+                    </DockIcon>
+                  </DockItem>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Reset total (dinamis: hanya saat papan tidak kosong) */}
+            {(activeModel !== "empty" || hasDrawings || formulaNotes.length > 0) && (
+              <>
+                <div className="w-px h-8 bg-slate-300/70 dark:bg-white/10 mx-0.5 self-center shrink-0" />
+                <DockItem className="aspect-square rounded-full border bg-slate-100/90 dark:bg-white/[0.07] text-slate-500 dark:text-zinc-400 border-slate-200/70 dark:border-white/[0.08] hover:!bg-rose-500/15">
+                  <DockLabel>Reset / Bersihkan Kanvas</DockLabel>
+                  <DockIcon>
+                    <RotateCcw className="w-full h-full" />
+                    <button
+                      type="button"
+                      aria-label="Reset / Bersihkan Seluruh Kanvas"
+                      onClick={() => {
+                        clearBoardShared();
+                        setFormulaNotes([]);
+                        setSelectedFormulaId(null);
+                        setInlineComposer(null);
+                        setIsTypingToolActive(false);
+                        setIsDrawingToolActive(false);
+                        setZoom2D(1);
+                        setPan2D({ x: 0, y: 0 });
+                        selectModel("empty");
+                      }}
+                      className="absolute inset-0 rounded-full cursor-pointer"
+                    />
+                  </DockIcon>
+                </DockItem>
+              </>
+            )}
+          </Dock>
         </div>
 
         {/* G. KATEX FORMULA COMPOSER MODAL */}

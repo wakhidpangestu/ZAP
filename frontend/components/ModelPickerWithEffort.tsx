@@ -449,12 +449,15 @@ export default function ModelPickerWithEffort({
         aria-expanded={isOpen}
         aria-haspopup="dialog"
         title={`Model: ${currentModel.name} • Effort: ${formatEffort(reasoningEffort)}`}
-        className="flex items-center gap-1.5 px-2.5 py-1.5 min-h-[28px] rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.06] text-xs text-slate-700 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50"
+        className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 min-h-[28px] rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.06] text-xs text-slate-700 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer select-none whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50"
       >
-        <span className="font-medium text-xs text-slate-800 dark:text-zinc-200">
+        <span className="hidden min-[430px]:inline font-medium text-xs text-slate-800 dark:text-zinc-200 whitespace-nowrap">
           {currentModel.id.includes("deepseek") ? "DeepSeek-V4.1-Flash" : currentModel.shortName}
         </span>
-        <span className="text-slate-600 dark:text-zinc-400 text-xs">
+        <span className="min-[430px]:hidden font-medium text-xs text-slate-800 dark:text-zinc-200 whitespace-nowrap">
+          {currentModel.id === "auto-agent" ? "Auto-Agent" : currentModel.id.includes("deepseek") ? "DeepSeek" : currentModel.shortName}
+        </span>
+        <span className="text-slate-600 dark:text-zinc-400 text-xs whitespace-nowrap">
           {formatEffort(reasoningEffort)}
         </span>
         <ChevronDown

@@ -11,7 +11,7 @@ import sys
 import uuid
 from typing import Any
 import sympy as sp
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -396,7 +396,7 @@ def diagnose_student_scratchpad(request: DiagnoseRequest):
 
 
 # ==========================================
-# ZAP Agent Harness — Continuous Memory & RAG Endpoints
+# ZAP Agent Harness - Continuous Memory & RAG Endpoints
 # ==========================================
 
 class HarnessLearnRequest(BaseModel):
@@ -405,12 +405,14 @@ class HarnessLearnRequest(BaseModel):
     explicit_steps: list[str] | None = Field(default=None, description="Langkah aljabar eksplisit jika ada")
     target_variable: str = Field(default="x", max_length=5, description="Variabel target")
     tier_hint: str | None = Field(default=None, description="Jenjang pendidikan opsional (TK s/d S3)")
+    user_id: str | None = Field(default=None, max_length=320, description="Identitas pengguna (dihash di server menjadi kunci profil anonim)")
 
 
 class HarnessContextRequest(BaseModel):
     query: str = Field(..., description="Kueri atau pesan pengguna yang akan diperkaya dengan memori")
     limit: int | None = Field(default=None, ge=1, le=10, description="Jumlah memori relevan maksimum")
     top_k: int | None = Field(default=None, ge=1, le=10, description="Alias untuk limit")
+    user_id: str | None = Field(default=None, max_length=320, description="Identitas pengguna untuk profil belajar (dihash di server)")
 
 
 @app.post("/api/v1/harness/learn", status_code=status.HTTP_200_OK, tags=["Agent Harness"])
@@ -441,6 +443,7 @@ def harness_learn_from_conversation(req: HarnessLearnRequest, http_request: Requ
         )
 
     result = agent_harness.learn_from_conversation(
+        user_id=req.user_id,
         user_message=req.user_message,
         assistant_reply=req.assistant_reply,
         explicit_steps=req.explicit_steps,
@@ -451,13 +454,75 @@ def harness_learn_from_conversation(req: HarnessLearnRequest, http_request: Requ
 
 
 @app.post("/api/v1/harness/context", status_code=status.HTTP_200_OK, tags=["Agent Harness"])
-def harness_retrieve_context(req: HarnessContextRequest):
+def harness_retrieve_context(req: HarnessContextRequest, http_request: Request):
     """
     Mengambil konteks memori relevan (<ZAP_AGENT_HARNESS_CONTEXT>) dari Episodic Memory,
     MathCorpusStore, dan 2D/3D Geometry Database untuk disuntikkan ke prompt agen.
+
+    Keamanan: endpoint ini server-to-server dan secret-gated karena responsnya
+    memuat cuplikan memori episodik pengguna (user_query dan langkah yang
+    diekstrak). Rute chat Next.js adalah satu-satunya pemanggil yang sah.
     """
+    _require_harness_secret(http_request)
     effective_limit = req.limit or req.top_k or 3
-    return agent_harness.build_harness_context(query=req.query, limit=effective_limit)
+    return agent_harness.build_harness_context(query=req.query, limit=effective_limit, user_id=req.user_id)
+
+
+@app.get("/api/v1/harness/profile", status_code=status.HTTP_200_OK, tags=["Agent Harness"])
+def harness_learner_profile(user_id: str, http_request: Request):
+    """Ringkasan profil belajar per pengguna (agregat topik, langkah valid, dan miskonsepsi).
+
+    Secret-gated: profil belajar adalah data per pengguna, bukan data publik.
+    """
+    _require_harness_secret(http_request)
+    profile = agent_harness.get_learner_profile(user_id)
+    return {"status": "success", "learner_profile": profile}
+
+
+class GeometryPatternRequest(BaseModel):
+    phrase: str = Field(..., max_length=500, description="Frasa pengguna yang resolusinya tervalidasi")
+    spec: dict = Field(..., description="Spesifikasi bangun tervalidasi (family, sides, entity_id, params)")
+
+
+class GeometryMatchRequest(BaseModel):
+    query: str = Field(..., max_length=500, description="Pesan pengguna untuk dicocokkan ke pola geometri yang sudah dipelajari")
+
+
+def _require_harness_secret(http_request: Request) -> None:
+    harness_secret = os.environ.get("ZAP_HARNESS_SECRET", "").strip()
+    if harness_secret:
+        provided = http_request.headers.get("X-Harness-Secret", "")
+        if not provided or not hmac.compare_digest(provided, harness_secret):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Header X-Harness-Secret tidak ada atau tidak cocok.",
+            )
+    elif os.environ.get("ZAP_ENV", "").strip().lower() == "production":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ZAP_HARNESS_SECRET belum diatur; endpoint tulis dinonaktifkan pada mode production.",
+        )
+
+
+@app.post("/api/v1/harness/geometry-pattern", status_code=status.HTTP_200_OK, tags=["Agent Harness"])
+def harness_learn_geometry_pattern(req: GeometryPatternRequest, http_request: Request):
+    """Simpan pola frasa -> spec geometri yang SUDAH tervalidasi mesin (self-learning, fail-closed, secret-gated)."""
+    _require_harness_secret(http_request)
+    return agent_harness.learn_geometry_pattern(phrase=req.phrase, spec=req.spec)
+
+
+@app.get("/api/v1/harness/geometry-patterns", status_code=status.HTTP_200_OK, tags=["Agent Harness"])
+def harness_list_geometry_patterns(limit: int = 200):
+    """Daftar pola geometri yang sudah dipelajari agen dari resolusi tervalidasi."""
+    patterns = agent_harness.list_geometry_patterns(limit=limit)
+    return {"status": "success", "total": len(patterns), "patterns": patterns}
+
+
+@app.post("/api/v1/harness/geometry-match", status_code=status.HTTP_200_OK, tags=["Agent Harness"])
+def harness_match_geometry_pattern(req: GeometryMatchRequest):
+    """Cocokkan pesan ke pola geometri yang sudah dipelajari (deterministik, tanpa LLM)."""
+    match = agent_harness.match_geometry_pattern(req.query)
+    return {"status": "success", "matched": match is not None, "match": match}
 
 
 @app.get("/api/v1/harness/stats", status_code=status.HTTP_200_OK, tags=["Agent Harness"])
@@ -470,3 +535,95 @@ def harness_memory_stats():
         "memory": mem_stats,
         "corpus": agent_harness.corpus_store.get_statistics(),
     }
+
+
+# =========================================================================
+# PAPAN KOLABORASI REALTIME (WebSocket relay + log sinkronisasi per ruang)
+# Ruang bersifat sementara di memori server; kode ruang adalah satu-satunya
+# kunci akses - siapa pun yang memegang kode dapat ikut menggambar.
+# =========================================================================
+BOARD_COLORS = ["#f43f5e", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"]
+_board_rooms: dict = {}
+
+
+def _board_room(room_key: str) -> dict:
+    return _board_rooms.setdefault(
+        room_key, {"peers": {}, "strokes": [], "notes": [], "state": None, "seq": 0}
+    )
+
+
+@app.websocket("/api/v1/board/{room_id}")
+async def board_socket(websocket: WebSocket, room_id: str):
+    room_key = re.sub(r"[^A-Za-z0-9_-]", "", room_id)[:24] or "umum"
+    room = _board_room(room_key)
+    await websocket.accept()
+    room["seq"] += 1
+    peer_id = f"u{room['seq']}"
+    color = BOARD_COLORS[(room["seq"] - 1) % len(BOARD_COLORS)]
+    name = (websocket.query_params.get("name") or "Tamu")[:24]
+    room["peers"][peer_id] = {"ws": websocket, "name": name, "color": color}
+    peers_payload = [
+        {"id": pid, "name": p["name"], "color": p["color"]}
+        for pid, p in room["peers"].items()
+    ]
+    try:
+        await websocket.send_json(
+            {
+                "t": "welcome",
+                "id": peer_id,
+                "color": color,
+                "peers": peers_payload,
+                "strokes": room["strokes"][-4000:],
+                "notes": room["notes"],
+                "state": room["state"],
+            }
+        )
+    except Exception:
+        room["peers"].pop(peer_id, None)
+        return
+    for pid, p in list(room["peers"].items()):
+        if pid != peer_id:
+            try:
+                await p["ws"].send_json(
+                    {"t": "join", "peer": {"id": peer_id, "name": name, "color": color}}
+                )
+            except Exception:
+                pass
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            if not isinstance(msg, dict):
+                continue
+            kind = msg.get("t")
+            if kind == "seg":
+                room["strokes"].append(msg)
+                if len(room["strokes"]) > 6000:
+                    del room["strokes"][:2000]
+            elif kind == "clear":
+                room["strokes"] = []
+            elif kind == "notes":
+                if isinstance(msg.get("notes"), list):
+                    room["notes"] = msg["notes"][:60]
+            elif kind == "state":
+                room["state"] = msg
+            out = dict(msg)
+            out["from"] = peer_id
+            for pid, p in list(room["peers"].items()):
+                if pid != peer_id:
+                    try:
+                        await p["ws"].send_json(out)
+                    except Exception:
+                        pass
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        room["peers"].pop(peer_id, None)
+        for p in list(room["peers"].values()):
+            try:
+                await p["ws"].send_json({"t": "leave", "id": peer_id})
+            except Exception:
+                pass
+        if not room["peers"]:
+            _board_rooms.pop(room_key, None)

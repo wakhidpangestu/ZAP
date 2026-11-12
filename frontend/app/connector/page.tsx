@@ -138,7 +138,7 @@ const PROVIDERS: ProviderConfig[] = [
       "Buka Anthropic Console di console.anthropic.com.",
       "Login dan pastikan akun organisasi Anda telah terverifikasi.",
       "Buka menu 'API Keys' di bawah pengaturan profil atau workspace.",
-      "Klik 'Create Key', beri label (misal: 'ZAP Studio'), lalu salin kunci yang diawali 'sk-ant-'.",
+      "Klik 'Create Key', beri label (misal: 'ChatZAP'), lalu salin kunci yang diawali 'sk-ant-'.",
       "Tempelkan pada kolom di bawah ini lalu klik 'Simpan & Uji Koneksi'.",
     ],
   },
@@ -503,7 +503,7 @@ export default function ConnectorPage() {
               className="hidden sm:inline-flex items-center gap-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400 hover:text-[#09090b] dark:hover:text-white transition py-1.5 px-2.5 rounded-full hover:bg-zinc-900/[0.04] dark:hover:bg-white/[0.06]"
             >
               <ChevronLeft className="w-3.5 h-3.5" />
-              <span>Kembali ke Studio</span>
+              <span>Kembali ke ChatZAP</span>
             </Link>
           </div>
 
@@ -532,7 +532,7 @@ export default function ConnectorPage() {
               onClick={() => router.push("/chat")}
               className="text-xs font-bold px-4 py-2 min-h-[36px] rounded-full bg-[#09090b] dark:bg-white hover:bg-zinc-800 dark:hover:bg-zinc-200 text-white dark:text-[#09090b] transition flex items-center gap-2 cursor-pointer shadow-sm"
             >
-              <span>Buka Studio</span>
+              <span>Buka ChatZAP</span>
               <span className="w-5 h-5 rounded-full bg-white/15 dark:bg-black/10 flex items-center justify-center">
                 <ArrowRight className="w-3 h-3" />
               </span>
@@ -571,7 +571,7 @@ export default function ConnectorPage() {
               </div>
               <div>
                 <span className="text-[11px] font-mono text-zinc-400 dark:text-zinc-500 uppercase tracking-wider block">
-                  Model Aktif Studio Saat Ini
+                  Model Aktif ChatZAP Saat Ini
                 </span>
                 <div className="text-base font-bold text-[#09090b] dark:text-white flex items-center gap-2 mt-0.5">
                   <span>{currentActiveModelObj.name}</span>
@@ -587,7 +587,7 @@ export default function ConnectorPage() {
               onClick={() => router.push("/chat")}
               className="text-xs font-semibold text-[#8f5e32] dark:text-[#d4a574] hover:text-[#09090b] dark:hover:text-white bg-[#faf4ed] dark:bg-[#c4956a]/15 hover:bg-[#f3e8da] py-2 px-3.5 rounded-full border border-[#d4a574]/40 inline-flex items-center gap-1.5 cursor-pointer transition self-start sm:self-auto"
             >
-              <span>Mulai Sesi di Studio</span>
+              <span>Mulai Sesi di ChatZAP</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -602,7 +602,7 @@ export default function ConnectorPage() {
           {/* Clean Segmented Grid to Switch Active Model */}
           <div className="space-y-2">
             <span className="text-xs text-zinc-500 dark:text-zinc-400 block font-medium">
-              Klik salah satu model di bawah untuk menjadikannya model utama di Studio:
+              Klik salah satu model di bawah untuk menjadikannya model utama di ChatZAP:
             </span>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
               {[
@@ -929,7 +929,7 @@ export default function ConnectorPage() {
                         {isModelSelected ? (
                           <span className="text-xs font-mono text-[#8f5e32] dark:text-[#d4a574] bg-[#faf4ed] dark:bg-[#c4956a]/15 px-3 py-1 min-h-[30px] rounded-full border border-[#d4a574]/50 flex items-center gap-1.5 font-semibold">
                             <Check className="w-3.5 h-3.5" />
-                            <span>Aktif di Studio</span>
+                            <span>Aktif di ChatZAP</span>
                           </span>
                         ) : (
                           <button

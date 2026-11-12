@@ -39,7 +39,7 @@ OPEN_MATH_SOURCES: Dict[str, Dict[str, Any]] = {
         "tier": "SMP",
         "topic": "Aljabar & Penalaran Kuantitatif",
         "subtopic": "Multi-Step Reasoning (HuggingFace GSM8K)",
-        "description": "HuggingFace Datasets Server — OpenAI GSM8K",
+        "description": "HuggingFace Datasets Server - OpenAI GSM8K",
     },
     "wikimedia_math_theorems": {
         "url": "https://en.wikipedia.org/api/rest_v1/page/summary/",

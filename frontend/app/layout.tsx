@@ -14,12 +14,12 @@ const geistMono = localFont({
   weight: "100 900",
 });
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://chatzap.ai";
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://chatzap.web.id";
 
 export const metadata: Metadata = {
   metadataBase: new URL(APP_URL),
   title: {
-    default: "ChatZAP — Zero Answer Policy | AI Math Canvas & Socratic Tutor",
+    default: "ChatZAP - Zero Answer Policy | AI Math Canvas & Socratic Tutor",
     template: "%s | ChatZAP",
   },
   description:
@@ -52,7 +52,7 @@ export const metadata: Metadata = {
     },
   },
   openGraph: {
-    title: "ChatZAP — Zero Answer Policy | AI Math Canvas & Socratic Tutor",
+    title: "ChatZAP - Zero Answer Policy | AI Math Canvas & Socratic Tutor",
     description:
       "Web-first 3D interactive math canvas with Zero-Answer Socratic scaffolding (LOGICODIX 2026). Diverifikasi deterministik dengan SymPy CAS.",
     url: APP_URL,
@@ -71,7 +71,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "ChatZAP — Zero Answer Policy | AI Math Canvas & Socratic Tutor",
+    title: "ChatZAP - Zero Answer Policy | AI Math Canvas & Socratic Tutor",
     description:
       "Interactive 3D Math Canvas with Zero-Answer Socratic Scaffolding. CAS Deterministic Proofs.",
     images: ["/og-image.png"],

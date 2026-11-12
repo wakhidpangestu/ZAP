@@ -2,7 +2,7 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "ChatZAP — Zero Answer Policy",
+    name: "ChatZAP - Zero Answer Policy",
     short_name: "ChatZAP",
     description: "Web-First 3D Interactive Math Canvas with Zero-Answer Socratic Scaffolding & Deterministic SymPy CAS",
     start_url: "/chat",

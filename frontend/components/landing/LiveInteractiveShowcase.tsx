@@ -322,7 +322,7 @@ const STUDIO_SCENARIOS = {
         { site: "canvas.3d", title: "Plot Parabola & Titik Puncak" },
       ],
       answer:
-        "Tepat sekali! Sekarang kedua barismu sudah ekuivalen di SymPy CAS. Perhatikan grafik fungsi dan distribusi nilai y di bawah ini—di titik x berapa puncak lengkungan parabola tersebut berbalik arah?",
+        "Tepat sekali! Sekarang kedua barismu sudah ekuivalen di SymPy CAS. Perhatikan grafik fungsi dan distribusi nilai y di bawah ini - di titik x berapa puncak lengkungan parabola tersebut berbalik arah?",
       chart: true,
     },
   ],
@@ -347,7 +347,7 @@ const STUDIO_SCENARIOS = {
         { site: "canvas.3d", title: "Parabola Vertex & Roots" },
       ],
       answer:
-        "Spot on! Your new step is proven equivalent by SymPy CAS. Look at the plotted curve and value comparison below—at which x-coordinate does the vertex reach its minimum turning point?",
+        "Spot on! Your new step is proven equivalent by SymPy CAS. Look at the plotted curve and value comparison below - at which x-coordinate does the vertex reach its minimum turning point?",
       chart: true,
     },
   ],
@@ -538,7 +538,7 @@ function StudioBrowserDemo({ lang }: { lang: "id" | "en" }) {
         </div>
         <div className="flex items-center gap-1.5 ml-2 text-[13px] font-semibold text-zinc-700">
           <ZapLogo className="w-3.5 h-3.5 text-[#09090b]" />
-          <span>ChatZAP Socratic Studio</span>
+          <span>ChatZAP Socratic</span>
         </div>
         <span className="ml-auto text-[11px] font-mono font-medium text-zinc-500 bg-white border border-zinc-200 rounded-full px-2.5 py-0.5 shadow-sm">
           sympy-cas + socratic
@@ -854,8 +854,8 @@ export default function LiveInteractiveShowcase({
                 </svg>
                 <span>
                   {isId
-                    ? "ZAP Studio (Socratic Playground)"
-                    : "ZAP Studio (Socratic Playground)"}
+                    ? "ChatZAP (Socratic Playground)"
+                    : "ChatZAP (Socratic Playground)"}
                 </span>
               </button>
             </div>

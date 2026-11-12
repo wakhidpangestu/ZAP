@@ -143,3 +143,66 @@ class TestVerifyEndpoint:
         data = response.json()
         assert data["verified"] is False
         assert data["isEquivalent"] is False
+
+
+class TestLearnerProfile:
+    def _harness(self, tmp_path):
+        store = MathCorpusStore(
+            db_path=str(tmp_path / "corpus.db"),
+            jsonl_path=str(tmp_path / "corpus.jsonl"),
+        )
+        return ZAPAgentHarness(
+            db_path=str(tmp_path / "corpus.db"),
+            memory_jsonl_path=str(tmp_path / "memory.jsonl"),
+            corpus_store=store,
+        )
+
+    def test_profile_aggregates_valid_and_fault_turns(self, tmp_path):
+        harness = self._harness(tmp_path)
+        harness.learn_from_conversation(
+            user_message="cek coretan saya",
+            explicit_steps=["x^2 - 5x + 6 = 0", "(x - 2)(x - 3) = 0"],
+            target_var="x",
+            user_id="siswa@example.com",
+        )
+        result = harness.learn_from_conversation(
+            user_message="cek coretan saya lagi",
+            explicit_steps=["2x + 6 = 14", "2x = 20", "x = 10"],
+            target_var="x",
+            user_id="siswa@example.com",
+        )
+        profile = result["learner_profile"]
+        assert profile["turns"] == 2
+        assert profile["valid_turns"] == 1
+        assert profile["fault_turns"] == 1
+        assert "SIGN_INVERSION_OR_TRANSPOSITION_ERROR" in profile["misconceptions"]
+
+    def test_profile_isolated_per_user_and_raw_identity_not_stored(self, tmp_path):
+        harness = self._harness(tmp_path)
+        harness.learn_from_conversation(
+            user_message="cek coretan saya",
+            explicit_steps=["2x + 6 = 14", "2x = 20", "x = 10"],
+            target_var="x",
+            user_id="rahasia@example.com",
+        )
+        other = harness.get_learner_profile("oranglain@example.com")
+        assert other["turns"] == 0
+        import sqlite3
+        with sqlite3.connect(str(tmp_path / "corpus.db")) as conn:
+            rows = conn.execute("SELECT * FROM learner_profiles").fetchall()
+        assert len(rows) == 1
+        assert "rahasia@example.com" not in str(rows)
+
+    def test_context_injects_learner_profile_only_for_that_user(self, tmp_path):
+        harness = self._harness(tmp_path)
+        harness.learn_from_conversation(
+            user_message="cek coretan saya",
+            explicit_steps=["2x + 6 = 14", "2x = 20", "x = 10"],
+            target_var="x",
+            user_id="siswa@example.com",
+        )
+        ctx = harness.build_harness_context("persamaan linear", user_id="siswa@example.com")
+        assert "[LEARNER_PROFILE]" in ctx["prompt_injection"]
+        assert ctx["learner_profile"]["turns"] == 1
+        ctx_stranger = harness.build_harness_context("persamaan linear", user_id="baru@example.com")
+        assert "[LEARNER_PROFILE]" not in ctx_stranger["prompt_injection"]

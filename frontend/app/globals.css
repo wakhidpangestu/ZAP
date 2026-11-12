@@ -177,7 +177,7 @@ body {
 .animate-marquee {
   display: flex;
   width: max-content;
-  animation: marquee 38s linear infinite;
+  animation: marquee 58s linear infinite;
 }
 .animate-marquee:hover {
   animation-play-state: paused;
@@ -186,9 +186,26 @@ body {
 .animate-marquee-reverse {
   display: flex;
   width: max-content;
-  animation: marquee-reverse 42s linear infinite;
+  animation: marquee-reverse 64s linear infinite;
 }
 .animate-marquee-reverse:hover {
+  animation-play-state: paused;
+}
+
+.marquee-track {
+  display: flex;
+  width: max-content;
+  will-change: transform;
+  animation: marquee 58s linear infinite;
+}
+.marquee-track-reverse {
+  display: flex;
+  width: max-content;
+  will-change: transform;
+  animation: marquee-reverse 64s linear infinite;
+}
+.marquee-track:hover,
+.marquee-track-reverse:hover {
   animation-play-state: paused;
 }
 
@@ -301,11 +318,24 @@ textarea {
 
 /* Accessibility: Intentional reduced-motion behavior preserving state feedback (WCAG 2.1 SC 2.3.3) */
 @media (prefers-reduced-motion: reduce) {
-  .animate-marquee,
-  .animate-marquee-reverse,
   .animate-gradient,
   .animate-search-pulse {
     animation: none !important;
+  }
+  /* Marquee ekosistem dan badge hero SENGAJA tetap berjalan: gerakan lambat
+     ini fitur desain yang diminta eksplisit oleh pemilik situs (58/64 detik
+     per putaran), bukan animasi dekoratif biasa. */
+  .animate-marquee {
+    animation: marquee 58s linear infinite !important;
+  }
+  .animate-marquee-reverse {
+    animation: marquee-reverse 64s linear infinite !important;
+  }
+  .marquee-track {
+    animation: marquee 58s linear infinite !important;
+  }
+  .marquee-track-reverse {
+    animation: marquee-reverse 64s linear infinite !important;
   }
   .animate-zoom-in,
   .animate-slide-down,

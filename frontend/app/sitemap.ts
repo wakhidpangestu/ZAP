@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next";
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://chatzap.ai";
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://chatzap.web.id";
   const lastModified = new Date();
 
   return [

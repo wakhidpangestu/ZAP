@@ -538,7 +538,7 @@ export default function GoogleAuthButton({
             href="/chat"
             className="flex-1 py-2 px-3 rounded-xl bg-white hover:bg-zinc-200 text-zinc-950 font-semibold text-xs text-center transition"
           >
-            Lanjut ke Studio Chat
+            Lanjut ke ChatZAP
           </Link>
           <button
             type="button"

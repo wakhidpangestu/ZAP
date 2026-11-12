@@ -125,8 +125,8 @@ export default function LiveCasExplorer({ lang = "id" }: { lang?: "id" | "en" })
         left: pair.left,
         right: pair.right,
         message: isId
-          ? "Server verifikasi tidak terjangkau, sehingga langkah ini belum terverifikasi. Coba lagi nanti atau uji langsung di Studio."
-          : "The verification server is unreachable, so these steps are not yet verified. Try again later or test them in the Studio.",
+          ? "Server verifikasi tidak terjangkau, sehingga langkah ini belum terverifikasi. Coba lagi nanti atau uji langsung di ChatZAP."
+          : "The verification server is unreachable, so these steps are not yet verified. Try again later or test them in ChatZAP.",
       });
     } finally {
       setLoading(false);
@@ -136,13 +136,13 @@ export default function LiveCasExplorer({ lang = "id" }: { lang?: "id" | "en" })
   return (
     <section
       id="explorer"
-      className="w-full bg-gradient-to-r from-[#ba8852] via-[#c4956a] to-[#d4a574] py-12 sm:py-16 px-4 sm:px-6 lg:px-8 text-white relative shadow-inner"
+      className="w-full bg-gradient-to-r from-[#ba8852] via-[#c4956a] to-[#d4a574] dark:from-[#16120d] dark:via-[#1d1710] dark:to-[#16120d] py-12 sm:py-16 px-4 sm:px-6 lg:px-8 text-white relative shadow-inner"
     >
       <div className="max-w-4xl mx-auto">
-        <div className="bg-white text-[#09090b] rounded-2xl sm:rounded-3xl p-5 sm:p-7 shadow-2xl border border-white/60 transition-all">
+        <div className="bg-white dark:bg-[#121317] text-[#09090b] dark:text-zinc-100 rounded-2xl sm:rounded-3xl p-5 sm:p-7 shadow-2xl border border-white/60 dark:border-white/10 transition-all">
           {/* Top Switcher Bar */}
           <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-            <div className="flex items-center gap-1 bg-[#f5f3ef] p-1 rounded-xl border border-zinc-200/70">
+            <div className="flex items-center gap-1 bg-[#f5f3ef] dark:bg-white/5 p-1 rounded-xl border border-zinc-200/70 dark:border-white/10">
               <button
                 type="button"
                 onClick={() => {
@@ -151,8 +151,8 @@ export default function LiveCasExplorer({ lang = "id" }: { lang?: "id" | "en" })
                 }}
                 className={`px-4 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer ${
                   mode === "cas"
-                    ? "bg-white text-[#09090b] shadow-sm"
-                    : "text-zinc-500 hover:text-[#09090b]"
+                    ? "bg-white dark:bg-white/10 text-[#09090b] dark:text-white shadow-sm"
+                    : "text-zinc-500 dark:text-zinc-400 hover:text-[#09090b] dark:hover:text-white"
                 }`}
               >
                 {isId ? "Uji Langkah CAS" : "Verify CAS Step"}
@@ -165,15 +165,15 @@ export default function LiveCasExplorer({ lang = "id" }: { lang?: "id" | "en" })
                 }}
                 className={`px-4 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer ${
                   mode === "geometry"
-                    ? "bg-white text-[#09090b] shadow-sm"
-                    : "text-zinc-500 hover:text-[#09090b]"
+                    ? "bg-white dark:bg-white/10 text-[#09090b] dark:text-white shadow-sm"
+                    : "text-zinc-500 dark:text-zinc-400 hover:text-[#09090b] dark:hover:text-white"
                 }`}
               >
                 {isId ? "Geometri 2D & 3D" : "2D & 3D Geometry"}
               </button>
             </div>
 
-            <div className="hidden sm:flex items-center gap-1.5 text-xs text-zinc-500 font-medium">
+            <div className="hidden sm:flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400 font-medium">
               <Sparkles className="w-3.5 h-3.5 text-[#8f5e32]" />
               <span>
                 {isId
@@ -209,7 +209,7 @@ export default function LiveCasExplorer({ lang = "id" }: { lang?: "id" | "en" })
                     ? "Ketik fungsi atau permukaan 3D (contoh: z = x^2 - y^2 atau irisan kerucut)..."
                     : "Type a 2D/3D function or surface (e.g. z = x^2 - y^2)..."
                 }
-                className="w-full bg-[#faf9f6] hover:bg-[#f5f3ef] focus:bg-white text-[#09090b] placeholder:text-zinc-600 rounded-xl px-5 py-3.5 sm:py-4 text-sm sm:text-base border border-zinc-200/80 focus:border-[#c4956a] focus:ring-2 focus:ring-[#c4956a]/20 outline-none transition-all pr-10 font-mono"
+                className="w-full bg-[#faf9f6] dark:bg-white/5 hover:bg-[#f5f3ef] dark:hover:bg-white/[0.07] focus:bg-white dark:focus:bg-white/[0.08] text-[#09090b] dark:text-zinc-100 placeholder:text-zinc-600 dark:placeholder:text-zinc-500 rounded-xl px-5 py-3.5 sm:py-4 text-sm sm:text-base border border-zinc-200/80 dark:border-white/10 focus:border-[#c4956a] focus:ring-2 focus:ring-[#c4956a]/20 outline-none transition-all pr-10 font-mono"
               />
               {query && (
                 <button
@@ -249,23 +249,23 @@ export default function LiveCasExplorer({ lang = "id" }: { lang?: "id" | "en" })
           </form>
 
           {mode === "geometry" && (
-            <p className="mt-3 text-xs text-zinc-500 leading-relaxed">
+            <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
               {isId
-                ? "Mode Geometri hanya menampilkan contoh statis. Verifikasi ekuivalensi langkah tersedia di mode Uji Langkah CAS, dan visualisasi 3D interaktif tersedia di Studio."
-                : "Geometry mode only shows a static example. Step equivalence verification is available in Verify CAS Step mode, and interactive 3D visualization is available in the Studio."}
+                ? "Mode Geometri hanya menampilkan contoh statis. Verifikasi ekuivalensi langkah tersedia di mode Uji Langkah CAS, dan visualisasi 3D interaktif tersedia di ChatZAP."
+                : "Geometry mode only shows a static example. Step equivalence verification is available in Verify CAS Step mode, and interactive 3D visualization is available in ChatZAP."}
             </p>
           )}
 
           {/* Static Example Card (Geometry mode) */}
           {mode === "geometry" && showExample && !loading && (
-            <div className="mt-5 border-t border-zinc-100 pt-5 animate-slide-down">
-              <div className="bg-[#faf9f6] border border-zinc-200/90 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="mt-5 border-t border-zinc-100 dark:border-white/10 pt-5 animate-slide-down">
+              <div className="bg-[#faf9f6] dark:bg-white/5 border border-zinc-200/90 dark:border-white/10 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div className="space-y-2 flex-1">
                   <div className="flex items-center gap-2.5 flex-wrap">
-                    <span className="font-mono font-bold text-sm sm:text-base text-[#09090b] bg-white px-2.5 py-1 rounded-lg border border-zinc-200 shadow-sm">
+                    <span className="font-mono font-bold text-sm sm:text-base text-[#09090b] dark:text-white bg-white dark:bg-white/10 px-2.5 py-1 rounded-lg border border-zinc-200 dark:border-white/10 shadow-sm">
                       z = x^2 - y^2
                     </span>
-                    <span className="inline-flex items-center gap-1 bg-zinc-100 border border-zinc-300 text-zinc-700 text-xs font-semibold px-2.5 py-0.5 rounded-full">
+                    <span className="inline-flex items-center gap-1 bg-zinc-100 dark:bg-white/10 border border-zinc-300 dark:border-white/15 text-zinc-700 dark:text-zinc-200 text-xs font-semibold px-2.5 py-0.5 rounded-full">
                       {isId ? "Contoh" : "Example"}
                     </span>
                   </div>
@@ -276,7 +276,7 @@ export default function LiveCasExplorer({ lang = "id" }: { lang?: "id" | "en" })
                       : "Static example: saddle surface (hyperbolic paraboloid)"}
                   </div>
 
-                  <p className="text-xs sm:text-sm text-zinc-600 leading-relaxed">
+                  <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed">
                     {isId
                       ? "Pada bidang y = 0 kurva membuka ke atas (parabola z = x²), sedangkan pada bidang x = 0 kurva membuka ke bawah (z = -y²). Ini contoh tampilan materi geometri, bukan hasil verifikasi."
                       : "On the plane y = 0 the trace opens upward (parabola z = x²), while on x = 0 it opens downward (z = -y²). This is a static material example, not a verification result."}
@@ -285,7 +285,7 @@ export default function LiveCasExplorer({ lang = "id" }: { lang?: "id" | "en" })
 
                 <div className="w-full sm:w-auto shrink-0 self-stretch sm:self-center flex items-center">
                   <ActionButton href="/chat" variant="black" size="sm">
-                    {isId ? "Buka di Studio" : "Open in Studio"}
+                    {isId ? "Buka di ChatZAP" : "Open in ChatZAP"}
                   </ActionButton>
                 </div>
               </div>
@@ -294,11 +294,11 @@ export default function LiveCasExplorer({ lang = "id" }: { lang?: "id" | "en" })
 
           {/* Verification Result Card */}
           {mode === "cas" && result && !loading && (
-            <div className="mt-5 border-t border-zinc-100 pt-5 animate-slide-down">
-              <div className="bg-[#faf9f6] border border-zinc-200/90 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="mt-5 border-t border-zinc-100 dark:border-white/10 pt-5 animate-slide-down">
+              <div className="bg-[#faf9f6] dark:bg-white/5 border border-zinc-200/90 dark:border-white/10 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div className="space-y-2 flex-1">
                   <div className="flex items-center gap-2.5 flex-wrap">
-                    <span className="font-mono font-bold text-sm sm:text-base text-[#09090b] bg-white px-2.5 py-1 rounded-lg border border-zinc-200 shadow-sm">
+                    <span className="font-mono font-bold text-sm sm:text-base text-[#09090b] dark:text-white bg-white dark:bg-white/10 px-2.5 py-1 rounded-lg border border-zinc-200 dark:border-white/10 shadow-sm">
                       {result.left}
                       {result.right ? ` → ${result.right}` : ""}
                     </span>
@@ -315,7 +315,7 @@ export default function LiveCasExplorer({ lang = "id" }: { lang?: "id" | "en" })
                       </span>
                     )}
                     {result.kind === "unverified" && (
-                      <span className="inline-flex items-center gap-1 bg-zinc-100 border border-zinc-300 text-zinc-700 text-xs font-semibold px-2.5 py-0.5 rounded-full">
+                      <span className="inline-flex items-center gap-1 bg-zinc-100 dark:bg-white/10 border border-zinc-300 dark:border-white/15 text-zinc-700 dark:text-zinc-200 text-xs font-semibold px-2.5 py-0.5 rounded-full">
                         <HelpCircle className="w-3.5 h-3.5 text-zinc-500" />
                         {isId ? "Belum Terverifikasi" : "Not Yet Verified"}
                       </span>
@@ -328,7 +328,7 @@ export default function LiveCasExplorer({ lang = "id" }: { lang?: "id" | "en" })
                     </div>
                   )}
 
-                  <p className="text-xs sm:text-sm text-zinc-600 leading-relaxed">
+                  <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed">
                     {result.kind === "verified"
                       ? result.message ||
                         (result.isEquivalent
@@ -344,7 +344,7 @@ export default function LiveCasExplorer({ lang = "id" }: { lang?: "id" | "en" })
 
                 <div className="w-full sm:w-auto shrink-0 self-stretch sm:self-center flex items-center">
                   <ActionButton href="/chat" variant="black" size="sm">
-                    {isId ? "Buka di Studio" : "Open in Studio"}
+                    {isId ? "Buka di ChatZAP" : "Open in ChatZAP"}
                   </ActionButton>
                 </div>
               </div>
@@ -365,7 +365,7 @@ export default function LiveCasExplorer({ lang = "id" }: { lang?: "id" | "en" })
                 setQuery(pairText);
                 runVerification(pairText);
               }}
-              className="inline-flex items-center gap-2 bg-black/15 hover:bg-black/25 text-white border border-white/25 backdrop-blur-sm px-3.5 py-1.5 rounded-full text-xs font-mono transition-all cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
+              className="inline-flex items-center gap-2 bg-black/15 dark:bg-white/10 hover:bg-black/25 dark:hover:bg-white/15 text-white border border-white/25 dark:border-white/15 backdrop-blur-sm px-3.5 py-1.5 rounded-full text-xs font-mono transition-all cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
             >
               <span className="font-bold text-white tracking-wide">{preset.pillLabel}</span>
               <span className="text-white/85 text-[11px] font-sans font-normal">
