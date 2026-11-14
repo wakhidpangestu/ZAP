@@ -1782,6 +1782,34 @@ export default function ZAPApp() {
   const [vaultError, setVaultError] = useState<string | null>(null);
   const [vaultNotice, setVaultNotice] = useState<string | null>(null);
 
+  // Opsi sembunyikan/dismiss banner notifikasi vault & keamanan
+  const [dismissVaultBanner, setDismissVaultBanner] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return sessionStorage.getItem("zap_dismiss_vault_banner") === "true";
+    }
+    return false;
+  });
+  const [dismissSecurityBanner, setDismissSecurityBanner] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return sessionStorage.getItem("zap_dismiss_security_banner") === "true";
+    }
+    return false;
+  });
+
+  const handleDismissVaultBanner = () => {
+    setDismissVaultBanner(true);
+    try {
+      sessionStorage.setItem("zap_dismiss_vault_banner", "true");
+    } catch {}
+  };
+
+  const handleDismissSecurityBanner = () => {
+    setDismissSecurityBanner(true);
+    try {
+      sessionStorage.setItem("zap_dismiss_security_banner", "true");
+    } catch {}
+  };
+
   // Theme & Settings modal
   const { theme, setTheme } = useTheme();
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
@@ -4880,7 +4908,7 @@ export default function ZAPApp() {
                 )}
 
                 {/* Vault terenkripsi terkunci: pengingat non-blokir */}
-                {vaultState === "locked" && !isGuestAccount(currentUser) && (
+                {vaultState === "locked" && !isGuestAccount(currentUser) && !dismissVaultBanner && (
                   <div className="flex items-center justify-between gap-2 p-2.5 mb-2.5 rounded-2xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/25 animate-fade-in">
                     <div className="flex items-start gap-2 min-w-0">
                       <LockIcon className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
@@ -4889,16 +4917,27 @@ export default function ZAPApp() {
                         Buka vault untuk memuat percakapan &amp; kunci API dari perangkat lain.
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSettingsTab("general");
-                        setShowSettingsModal(true);
-                      }}
-                      className="shrink-0 px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-semibold transition cursor-pointer"
-                    >
-                      Buka kunci
-                    </button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSettingsTab("general");
+                          setShowSettingsModal(true);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-semibold transition cursor-pointer"
+                      >
+                        Buka kunci
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDismissVaultBanner}
+                        title="Sembunyikan notifikasi"
+                        aria-label="Sembunyikan notifikasi"
+                        className="p-1 rounded-lg text-amber-700 hover:text-amber-900 hover:bg-amber-500/20 dark:text-amber-400 dark:hover:text-amber-200 transition cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -4944,17 +4983,28 @@ export default function ZAPApp() {
                       </p>
                     )}
                   </div>
-                ) : jailbreakStrikes === 1 ? (
-                  <div className="flex items-center justify-between p-2.5 mb-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-800 dark:text-amber-300 animate-fade-in select-none">
-                    <div className="flex items-center gap-2">
+                ) : jailbreakStrikes === 1 && !dismissSecurityBanner ? (
+                  <div className="flex items-center justify-between gap-2 p-2.5 mb-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-800 dark:text-amber-300 animate-fade-in select-none">
+                    <div className="flex items-center gap-2 min-w-0">
                       <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
-                      <span className="text-xs font-medium">
+                      <span className="text-xs font-medium leading-relaxed">
                         <strong>Peringatan Keamanan:</strong> Terdeteksi 1x percobaan jailbreak. ChatZAP tidak akan dapat diakses jika jailbreak 1 kali lagi.
                       </span>
                     </div>
-                    <span className="font-mono font-bold text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 shrink-0">
-                      Strike 1/2
-                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="font-mono font-bold text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                        Strike 1/2
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleDismissSecurityBanner}
+                        title="Sembunyikan peringatan"
+                        aria-label="Sembunyikan peringatan"
+                        className="p-1 rounded-lg text-amber-700 hover:text-amber-900 hover:bg-amber-500/20 dark:text-amber-400 dark:hover:text-amber-200 transition cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 ) : null}
 
@@ -5697,7 +5747,7 @@ export default function ZAPApp() {
                 )}
 
                 {/* Vault terenkripsi terkunci: pengingat non-blokir */}
-                {vaultState === "locked" && !isGuestAccount(currentUser) && (
+                {vaultState === "locked" && !isGuestAccount(currentUser) && !dismissVaultBanner && (
                   <div className="flex items-center justify-between gap-2 p-2.5 mb-2.5 rounded-2xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/25 animate-fade-in">
                     <div className="flex items-start gap-2 min-w-0">
                       <LockIcon className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
@@ -5706,16 +5756,27 @@ export default function ZAPApp() {
                         Buka vault untuk memuat percakapan &amp; kunci API dari perangkat lain.
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSettingsTab("general");
-                        setShowSettingsModal(true);
-                      }}
-                      className="shrink-0 px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-semibold transition cursor-pointer"
-                    >
-                      Buka kunci
-                    </button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSettingsTab("general");
+                          setShowSettingsModal(true);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-semibold transition cursor-pointer"
+                      >
+                        Buka kunci
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDismissVaultBanner}
+                        title="Sembunyikan notifikasi"
+                        aria-label="Sembunyikan notifikasi"
+                        className="p-1 rounded-lg text-amber-700 hover:text-amber-900 hover:bg-amber-500/20 dark:text-amber-400 dark:hover:text-amber-200 transition cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -5761,17 +5822,28 @@ export default function ZAPApp() {
                       </p>
                     )}
                   </div>
-                ) : jailbreakStrikes === 1 ? (
-                  <div className="flex items-center justify-between p-2.5 mb-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-800 dark:text-amber-300 animate-fade-in select-none">
-                    <div className="flex items-center gap-2">
+                ) : jailbreakStrikes === 1 && !dismissSecurityBanner ? (
+                  <div className="flex items-center justify-between gap-2 p-2.5 mb-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-800 dark:text-amber-300 animate-fade-in select-none">
+                    <div className="flex items-center gap-2 min-w-0">
                       <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
-                      <span className="text-xs font-medium">
+                      <span className="text-xs font-medium leading-relaxed">
                         <strong>Peringatan Keamanan:</strong> Terdeteksi 1x percobaan jailbreak. ChatZAP tidak akan dapat diakses jika jailbreak 1 kali lagi.
                       </span>
                     </div>
-                    <span className="font-mono font-bold text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 shrink-0">
-                      Strike 1/2
-                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="font-mono font-bold text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                        Strike 1/2
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleDismissSecurityBanner}
+                        title="Sembunyikan peringatan"
+                        aria-label="Sembunyikan peringatan"
+                        className="p-1 rounded-lg text-amber-700 hover:text-amber-900 hover:bg-amber-500/20 dark:text-amber-400 dark:hover:text-amber-200 transition cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 ) : null}
 
