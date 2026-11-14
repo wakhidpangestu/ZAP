@@ -147,6 +147,21 @@ body {
     color-scheme: dark;
   }
 
+  /* Google Identity Services (GSI) iframe transparency fix in dark mode:
+     Prevents Chromium/Blink from forcing an opaque white canvas on cross-origin
+     Google sign-in buttons when html has color-scheme: dark. */
+  .gsi-button-wrap,
+  .gsi-button-wrap *,
+  iframe[src*="accounts.google.com/gsi"],
+  .S9gUrf-YoZ4jf,
+  .S9gUrf-YoZ4jf *,
+  div[id^="gsi_"],
+  div[id^="gsi_"] iframe {
+    color-scheme: light !important;
+    background-color: transparent !important;
+    background: transparent !important;
+  }
+
   body {
     @apply bg-background text-foreground;
     text-rendering: optimizeLegibility;

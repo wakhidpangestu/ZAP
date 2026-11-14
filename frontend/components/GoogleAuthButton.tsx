@@ -322,8 +322,29 @@ export default function GoogleAuthButton({
       }
     };
 
+    const makeIframeTransparent = () => {
+      if (gsiNativeBtnRef.current) {
+        const iframe = gsiNativeBtnRef.current.querySelector("iframe");
+        if (iframe) {
+          iframe.style.setProperty("color-scheme", "light", "important");
+          iframe.style.setProperty("background-color", "transparent", "important");
+          iframe.style.setProperty("background", "transparent", "important");
+          iframe.setAttribute("allowtransparency", "true");
+        }
+        const innerDiv = gsiNativeBtnRef.current.querySelector(".S9gUrf-YoZ4jf") as HTMLElement | null;
+        if (innerDiv) {
+          innerDiv.style.setProperty("color-scheme", "light", "important");
+          innerDiv.style.setProperty("background-color", "transparent", "important");
+          innerDiv.style.setProperty("background", "transparent", "important");
+        }
+      }
+    };
+
+    makeIframeTransparent();
+
     window.addEventListener("zap_theme_change", reRenderTheme);
     const observer = new MutationObserver((mutations) => {
+      makeIframeTransparent();
       for (const m of mutations) {
         if (m.type === "attributes" && m.attributeName === "class") {
           reRenderTheme();
@@ -332,6 +353,9 @@ export default function GoogleAuthButton({
     });
     if (typeof document !== "undefined") {
       observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+      if (gsiNativeBtnRef.current) {
+        observer.observe(gsiNativeBtnRef.current, { childList: true, subtree: true });
+      }
     }
 
     return () => {
@@ -610,7 +634,10 @@ export default function GoogleAuthButton({
   }
 
   return (
-    <div className={`w-full flex flex-col items-center justify-center ${className}`}>
+    <div
+      className={`gsi-button-wrap w-full flex flex-col items-center justify-center ${className}`}
+      style={{ colorScheme: "light", background: "transparent" }}
+    >
       {/* 
         Native Google GSI Container:
         Menampilkan tombol resmi Google yang langsung memicu popup Google Account Chooser.
@@ -618,7 +645,12 @@ export default function GoogleAuthButton({
       */}
       <div
         ref={gsiNativeBtnRef}
-        className={isGsiReady ? "flex items-center justify-center w-full min-h-[44px] overflow-hidden rounded-full transition-colors duration-200" : "hidden"}
+        style={{ colorScheme: "light", background: "transparent" }}
+        className={
+          isGsiReady
+            ? "flex items-center justify-center w-full max-w-[320px] min-h-[44px] overflow-hidden rounded-full bg-transparent transition-colors duration-200"
+            : "hidden"
+        }
       />
 
       {/* 
