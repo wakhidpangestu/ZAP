@@ -25,7 +25,7 @@ Sesuai ketentuan resmi **Guidebook LOGICODIX 2026 (Bab Submission & Ketentuan RE
 | **Subtema Hackathon** | **Smart & Fun Education** |
 | **Nama Aplikasi / Solusi** | **ZAP (Zero Answer Policy)** |
 | **Tautan Repositori GitHub**| [https://github.com/wakhidpangestu/ZAP](https://github.com/wakhidpangestu/ZAP) |
-| **Akses Demonstrasi Web** | [https://chatzap.web.id](https://chatzap.web.id) *(Cermin: [chatzap.xyz](https://chatzap.xyz) / Localhost `http://localhost:3000`)* |
+| **Akses Demonstrasi Web** | [https://chatzap.web.id](https://chatzap.web.id) *(atau via Localhost `http://localhost:3000`)* |
 
 ---
 
@@ -299,7 +299,7 @@ Sesuai instruksi Buku Panduan (Halaman 17 & 20), berikut adalah parameter konfig
 Sesuai regulasi Buku Panduan LOGICODIX 2026: **"Juri tidak boleh diwajibkan membayar, berlangganan, atau memiliki akses khusus untuk menjalankan fitur utama"**:
 
 ### Opsi 1: Mode Tamu Instan (Paling Mudah — 1 Klik Langsung Masuk)
-1. Buka halaman login di `http://localhost:3000/login` (atau `https://chatzap.xyz/login`).
+1. Buka halaman login di `http://localhost:3000/login` (atau `https://chatzap.web.id/login`).
 2. Masukkan nama Anda (misal: `"Dewan Juri LOGICODIX"`), pilih peran (*Pendidik/Siswa*), lalu klik tombol **"Masuk sebagai Siswa Tamu"**.
 3. Sistem seketika membuka kanvas 3D dan ruang chat tanpa memerlukan registrasi kata sandi atau setup token apa pun.
 
@@ -415,5 +415,5 @@ Repositori ini mematuhi seluruh ketentuan yang tercantum dalam **Buku Panduan LO
 * ✅ **Batas Akhir Submission (Code Freeze):** Seluruh kode diselesaikan dan dibekukan sebelum batas akhir 14 November 2026 pukul 23.59 WIB.
 * ✅ **Keamanan Kredensial:** Repositori 100% bebas dari kunci API rahasia atau password ter-hardcode. Seluruh rahasia dikelola melalui variabel lingkungan dengan template [`.env.example`](.env.example).
 * ✅ **Riwayat Commit Teratur:** Setiap commit menggunakan format konvensional (`feat:`, `fix:`, `refactor:`, `docs:`) yang mencerminkan perkembangan nyata selama Hacking Week tanpa *bulk upload*.
-* ✅ **Aksesibilitas Pengujian Juri:** Aplikasi dapat diakses langsung via web publik ([chatzap.xyz](https://chatzap.xyz)) maupun dijalankan secara lokal di laptop pada saat babak Grand Final luring.
+* ✅ **Aksesibilitas Pengujian Juri:** Aplikasi dapat diakses langsung via web publik ([chatzap.web.id](https://chatzap.web.id)) maupun dijalankan secara lokal di laptop pada saat babak Grand Final luring.
 * ✅ **Standar Etika & Transparansi:** Transparansi penuh atas pemanfaatan AI, atribusi pustaka pihak ketiga, dan perlindungan privasi data siswa.

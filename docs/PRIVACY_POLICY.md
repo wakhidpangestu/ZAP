@@ -1,7 +1,7 @@
 # KEBIJAKAN PRIVASI ZAP (Zero Answer Policy)
 
 Terakhir diperbarui: 7 November 2026
-Berlaku untuk layanan di chatzap.xyz dan seluruh sub-layanannya.
+Berlaku untuk layanan di chatzap.web.id dan seluruh sub-layanannya.
 
 ZAP adalah platform pembelajaran matematika dengan kebijakan Zero Answer
 Policy. Dokumen ini menjelaskan data apa yang kami kumpulkan, bagaimana
@@ -96,4 +96,4 @@ tercatat di profilnya.
 ## 9. Kontak
 
 Pertanyaan mengenai privasi dapat diajukan melalui halaman kontak di
-chatzap.xyz.
+chatzap.web.id.

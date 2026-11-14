@@ -8,7 +8,7 @@ diagnostik CFL (`backend/main.py`). Mesin CFL tidak diubah sama sekali.
 
 ## 1. Cara pengguna masuk dan langsung bisa memakai ZAP
 
-1. Pengguna membuka chatzap.xyz, menekan tombol Login di kanan atas, lalu
+1. Pengguna membuka chatzap.web.id, menekan tombol Login di kanan atas, lalu
    masuk dengan akun Google (Google Identity Services di frontend).
 2. Frontend mengirim ID token Google ke `POST /api/v1/auth/google`.
    Backend memverifikasi token itu langsung ke endpoint tokeninfo Google
