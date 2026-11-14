@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
-import path from "path";
 import { rateLimitByIp } from "@/utils/rate-limit";
+import { writeJsonFileAtomic } from "@/lib/atomic-file";
+import { getCandidateVaultFilePaths, getWritableVaultFilePath } from "@/lib/vault-dir";
 
 interface WaitlistEntry {
   name: string;
@@ -18,28 +19,21 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const MAX_WAITLIST_ENTRIES = 20000;
 
 function getWaitlistFilePath(): string {
-  try {
-    const dir = path.join(process.cwd(), ".zap_vault");
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    return path.join(dir, "waitlist.json");
-  } catch {
-    return "";
-  }
+  return getWritableVaultFilePath([], "waitlist.json");
 }
 
 function readEntries(): WaitlistEntry[] {
-  const filePath = getWaitlistFilePath();
-  if (!filePath) return [...memoryWaitlist];
-  try {
-    if (!fs.existsSync(filePath)) return [...memoryWaitlist];
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [...memoryWaitlist];
-  } catch {
-    return [...memoryWaitlist];
+  for (const filePath of getCandidateVaultFilePaths([], "waitlist.json")) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const raw = fs.readFileSync(filePath, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // coba sumber berikutnya
+    }
   }
+  return [...memoryWaitlist];
 }
 
 function writeEntries(entries: WaitlistEntry[]): void {
@@ -47,14 +41,7 @@ function writeEntries(entries: WaitlistEntry[]): void {
   memoryWaitlist.push(...entries);
   const filePath = getWaitlistFilePath();
   if (!filePath) return;
-  try {
-    // Tulis via berkas sementara lalu rename agar tidak meninggalkan JSON korup bila proses terputus di tengah penulisan.
-    const tmpPath = `${filePath}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(entries, null, 2), "utf-8");
-    fs.renameSync(tmpPath, filePath);
-  } catch {
-    // Filesystem read-only: entri tetap tersimpan di memori proses.
-  }
+  writeJsonFileAtomic(filePath, entries);
 }
 
 export async function POST(req: Request) {

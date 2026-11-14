@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 import fs from "fs";
-import path from "path";
 import { rateLimitByIp } from "@/utils/rate-limit";
 import { writeJsonFileAtomic } from "@/lib/atomic-file";
 import { createAccountSession } from "@/lib/account-session";
+import { getCandidateVaultFilePaths, getWritableVaultFilePath } from "@/lib/vault-dir";
 
 interface StoredAccount {
   id: string;
@@ -19,15 +19,7 @@ interface StoredAccount {
 const memoryAccounts = new Map<string, StoredAccount>();
 
 function getAccountsFilePath(): string {
-  try {
-    const dir = path.join(process.cwd(), ".zap_vault");
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    return path.join(dir, "accounts.json");
-  } catch {
-    return "";
-  }
+  return getWritableVaultFilePath([], "accounts.json");
 }
 
 function loadAccounts(): Record<string, StoredAccount> {
@@ -36,17 +28,18 @@ function loadAccounts(): Record<string, StoredAccount> {
     result[key] = val;
   });
 
-  const filePath = getAccountsFilePath();
-  if (filePath && fs.existsSync(filePath)) {
-    try {
-      const raw = fs.readFileSync(filePath, "utf-8");
-      const parsed = JSON.parse(raw) as Record<string, StoredAccount>;
-      for (const [k, v] of Object.entries(parsed)) {
-        result[k] = v;
-        memoryAccounts.set(k, v);
+  for (const filePath of getCandidateVaultFilePaths([], "accounts.json")) {
+    if (fs.existsSync(filePath)) {
+      try {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        const parsed = JSON.parse(raw) as Record<string, StoredAccount>;
+        for (const [k, v] of Object.entries(parsed)) {
+          if (!result[k]) result[k] = v;
+          if (!memoryAccounts.has(k)) memoryAccounts.set(k, v);
+        }
+      } catch {
+        // ignore read errors on read-only/corrupt fs
       }
-    } catch {
-      // ignore read errors on read-only fs
     }
   }
   return result;

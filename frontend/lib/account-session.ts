@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import { ensureWritableVaultDir, getCandidateVaultFilePaths } from "@/lib/vault-dir";
 
 /**
  * Token sesi akun ZAP (email/password) untuk sinkronisasi terenkripsi.
@@ -33,25 +34,29 @@ function getSessionSecret(): Buffer {
   }
 
   try {
-    const dir = path.join(process.cwd(), ".zap_vault", "security");
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const secretPath = path.join(dir, "session-secret");
-    if (fs.existsSync(secretPath)) {
-      const existing = fs.readFileSync(secretPath, "utf-8").trim();
-      if (existing.length >= 32) {
-        cachedSecret = Buffer.from(existing, "utf-8");
-        return cachedSecret;
+    for (const candidate of getCandidateVaultFilePaths(["security"], "session-secret")) {
+      if (fs.existsSync(candidate)) {
+        const existing = fs.readFileSync(candidate, "utf-8").trim();
+        if (existing.length >= 32) {
+          cachedSecret = Buffer.from(existing, "utf-8");
+          return cachedSecret;
+        }
       }
     }
-    const generated = crypto.randomBytes(32).toString("hex");
-    fs.writeFileSync(secretPath, generated, { encoding: "utf-8", mode: 0o600 });
-    cachedSecret = Buffer.from(generated, "utf-8");
-    return cachedSecret;
+    const dir = ensureWritableVaultDir("security");
+    if (dir) {
+      const secretPath = path.join(dir, "session-secret");
+      const generated = crypto.randomBytes(32).toString("hex");
+      fs.writeFileSync(secretPath, generated, { encoding: "utf-8", mode: 0o600 });
+      cachedSecret = Buffer.from(generated, "utf-8");
+      return cachedSecret;
+    }
   } catch {
-    // Filesystem read-only: pakai secret proses (sesi hilang saat restart).
-    cachedSecret = crypto.randomBytes(32);
-    return cachedSecret;
+    // fallback ke secret proses di bawah
   }
+  // Filesystem read-only: pakai secret proses (sesi hilang saat restart).
+  cachedSecret = crypto.randomBytes(32);
+  return cachedSecret;
 }
 
 function base64UrlEncode(input: Buffer | string): string {
@@ -120,6 +125,41 @@ export function verifyAccountSession(token: string): VerifiedAccountSession | nu
     const now = Math.floor(Date.now() / 1000);
     if (payload.x <= now) return null;
     return { email: payload.e.trim().toLowerCase(), expiresAt: payload.x * 1000 };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Memverifikasi header `Authorization: Bearer <token>` (baik token sesi akun ZAP
+ * maupun Google ID token) dan mengembalikan email terverifikasi, atau `null`.
+ */
+export async function verifyBearerIdentity(req: Request): Promise<string | null> {
+  const authHeader = req.headers.get("authorization") || "";
+  if (!authHeader.startsWith("Bearer ")) return null;
+  const rawToken = authHeader.slice("Bearer ".length).trim();
+  if (!rawToken) return null;
+
+  const accountSession = verifyAccountSession(rawToken);
+  if (accountSession) {
+    return accountSession.email;
+  }
+
+  const expectedAud =
+    process.env.ZAP_GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
+  if (!expectedAud) return null;
+
+  try {
+    const res = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(rawToken)}`,
+      { signal: AbortSignal.timeout(4000) }
+    );
+    if (!res.ok) return null;
+    const info = (await res.json()) as Record<string, unknown>;
+    if (info.aud !== expectedAud) return null;
+    if (info.email_verified !== "true" && info.email_verified !== true) return null;
+    const email = typeof info.email === "string" ? info.email.trim().toLowerCase() : "";
+    return email || null;
   } catch {
     return null;
   }

@@ -95,35 +95,83 @@ export function loadConversations<M, C>(userEmailOrId?: string | null): StoredCo
   }
 }
 
+function stripHeavyAttachmentsFromConvs<M, C>(
+  list: StoredConversation<M, C>[],
+  keepFirstNWithMedia: number
+): StoredConversation<M, C>[] {
+  return list.map((c, idx) => {
+    if (idx < keepFirstNWithMedia) return c;
+    return {
+      ...c,
+      messages: c.messages.map((m) => {
+        const msg = m as Record<string, unknown>;
+        if (!Array.isArray(msg.attachedFiles) || msg.attachedFiles.length === 0) return m;
+        return {
+          ...msg,
+          attachedFiles: msg.attachedFiles.map((f) => {
+            if (!f || typeof f !== "object") return f;
+            const fileObj = f as Record<string, unknown>;
+            const rawDataUrl = typeof fileObj.dataUrl === "string" ? fileObj.dataUrl : "";
+            const rawContent = typeof fileObj.content === "string" ? fileObj.content : "";
+            const isHeavy = rawDataUrl.length > 4096 || rawContent.length > 4096;
+            if (!isHeavy) return f;
+            return {
+              id: fileObj.id,
+              name: fileObj.name,
+              size: fileObj.size,
+              type: fileObj.type,
+              uploadedAt: fileObj.uploadedAt,
+              workspaceId: fileObj.workspaceId,
+            };
+          }),
+        } as M;
+      }),
+    };
+  });
+}
+
 export function saveConversations<M, C>(
   list: StoredConversation<M, C>[],
   userEmailOrId?: string | null
 ): void {
   if (typeof window === "undefined") return;
+  const targetEmail = userEmailOrId ? userEmailOrId.toLowerCase().trim() : undefined;
+  const trimmed = [...list]
+    .filter((c) => {
+      if (!targetEmail) return !c.userEmail;
+      return !c.userEmail || c.userEmail.toLowerCase().trim() === targetEmail;
+    })
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, MAX_CONVERSATIONS)
+    .map((c) => ({
+      ...c,
+      messages: c.messages.slice(-MAX_MESSAGES_PER_CONVERSATION),
+      userEmail: targetEmail || c.userEmail,
+    }));
+
+  const key = getUserStorageKey(userEmailOrId);
   try {
-    const targetEmail = userEmailOrId ? userEmailOrId.toLowerCase().trim() : undefined;
-    const trimmed = [...list]
-      .filter((c) => {
-        if (!targetEmail) return !c.userEmail;
-        return !c.userEmail || c.userEmail.toLowerCase().trim() === targetEmail;
-      })
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-      .slice(0, MAX_CONVERSATIONS)
-      .map((c) => ({
-        ...c,
-        messages: c.messages.slice(-MAX_MESSAGES_PER_CONVERSATION),
-        userEmail: targetEmail || c.userEmail,
-      }));
-
-    const key = getUserStorageKey(userEmailOrId);
-    const jsonStr = JSON.stringify(trimmed);
-    window.localStorage.setItem(key, jsonStr);
-
+    window.localStorage.setItem(key, JSON.stringify(trimmed));
     if (targetEmail) {
       window.localStorage.setItem("zap_last_active_user_email", targetEmail);
     }
+    return;
   } catch {
-    // Kuota penuh atau mode privat: memory sesi tetap berjalan di state.
+    // Bila kuota localStorage penuh karena gambar base64, pertahankan metadata lampiran
+    // agar teks & riwayat percakapan tetap tersimpan.
+  }
+
+  for (const keepMediaCount of [3, 0]) {
+    try {
+      const compact = stripHeavyAttachmentsFromConvs(trimmed, keepMediaCount);
+      window.localStorage.setItem(key, JSON.stringify(compact));
+      if (targetEmail) {
+        window.localStorage.setItem("zap_last_active_user_email", targetEmail);
+      }
+      return;
+    } catch {
+      // coba tingkat kompresi berikutnya
+    }
   }
 }
 

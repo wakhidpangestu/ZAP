@@ -97,8 +97,6 @@ export default function GoogleAuthButton({
     (response: { credential: string }) => {
       const payload = decodeGoogleJwt(response.credential);
       if (payload) {
-        // Simpan ID token agar sinkronisasi vault bisa diautentikasi ke server.
-        saveGoogleIdToken(response.credential);
         const cleanPic = cleanAvatarUrl(payload.picture);
         const realGoogleUser: ZAPUser = {
           id: payload.sub || "usr_" + Math.random().toString(36).substring(2, 9),
@@ -116,6 +114,8 @@ export default function GoogleAuthButton({
           if (lastEmail && lastEmail !== realGoogleUser.email.toLowerCase().trim()) {
             clearLocalWorkingSession();
           }
+          // Simpan ID token SESUDAH clearLocalWorkingSession agar token akun baru tidak ikut terhapus.
+          saveGoogleIdToken(response.credential);
           localStorage.setItem("zap_authenticated_user", JSON.stringify(realGoogleUser));
           markSessionCookie();
 

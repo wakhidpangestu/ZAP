@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { rateLimitByIp } from "@/utils/rate-limit";
 import { writeJsonFileAtomic, writeBufferFileAtomic } from "@/lib/atomic-file";
+import { ensureWritableVaultDir, getCandidateVaultDirs } from "@/lib/vault-dir";
 
 function getSafeKey(emailOrId: string): string {
   return (emailOrId || "anonymous")
@@ -15,15 +16,7 @@ function getSafeKey(emailOrId: string): string {
 }
 
 function getVaultDir(subdir: string): string {
-  try {
-    const dir = path.join(process.cwd(), ".zap_vault", subdir);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    return dir;
-  } catch {
-    return "";
-  }
+  return ensureWritableVaultDir(subdir);
 }
 
 function isBogusAvatarUrl(url?: string | null): boolean {
@@ -78,49 +71,50 @@ function getLegacyKey(email: string): string {
 
 function lookupVaultAvatarForEmail(email: string): { avatar?: string; name?: string } {
   if (!email) return {};
-  const usersDir = getVaultDir("users");
-  if (!usersDir) return {};
-
   let fallbackName: string | undefined;
   const candidates = Array.from(new Set([getSafeKey(email), getLegacyKey(email)]));
-  for (const key of candidates) {
-    const filePath = path.join(usersDir, `${key}.json`);
-    if (!fs.existsSync(filePath)) continue;
-    try {
-      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      const vaultAvatar = parsed?.user?.avatar;
-      const vaultName = parsed?.user?.name;
-      if (!fallbackName && vaultName) fallbackName = vaultName;
-      if (!isBogusAvatarUrl(vaultAvatar)) {
-        return { avatar: normalizeGoogleAvatarUrl(vaultAvatar), name: vaultName };
+  for (const usersDir of getCandidateVaultDirs("users")) {
+    for (const key of candidates) {
+      const filePath = path.join(usersDir, `${key}.json`);
+      if (!fs.existsSync(filePath)) continue;
+      try {
+        const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+        const vaultAvatar = parsed?.user?.avatar;
+        const vaultName = parsed?.user?.name;
+        if (!fallbackName && vaultName) fallbackName = vaultName;
+        if (!isBogusAvatarUrl(vaultAvatar)) {
+          return { avatar: normalizeGoogleAvatarUrl(vaultAvatar), name: vaultName };
+        }
+      } catch {
+        // ignore corrupt file, try next candidate
       }
-    } catch {
-      // ignore corrupt file, try next candidate
     }
   }
   return fallbackName ? { name: fallbackName } : {};
 }
 
 function readDiskAvatar(cacheKey: string): { buffer: Buffer; contentType: string } | null {
-  const avatarsDir = getVaultDir("avatars");
-  if (!avatarsDir || !cacheKey) return null;
-  const binPath = path.join(avatarsDir, `${cacheKey}.bin`);
-  if (!fs.existsSync(binPath)) return null;
-  try {
-    const buffer = fs.readFileSync(binPath);
-    if (buffer.length === 0) return null;
-    let contentType = "image/png";
-    const metaPath = path.join(avatarsDir, `${cacheKey}.meta.json`);
-    if (fs.existsSync(metaPath)) {
-      const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
-      if (typeof meta?.contentType === "string" && meta.contentType.startsWith("image/")) {
-        contentType = meta.contentType;
+  if (!cacheKey) return null;
+  for (const avatarsDir of getCandidateVaultDirs("avatars")) {
+    const binPath = path.join(avatarsDir, `${cacheKey}.bin`);
+    if (!fs.existsSync(binPath)) continue;
+    try {
+      const buffer = fs.readFileSync(binPath);
+      if (buffer.length === 0) continue;
+      let contentType = "image/png";
+      const metaPath = path.join(avatarsDir, `${cacheKey}.meta.json`);
+      if (fs.existsSync(metaPath)) {
+        const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+        if (typeof meta?.contentType === "string" && meta.contentType.startsWith("image/")) {
+          contentType = meta.contentType;
+        }
       }
+      return { buffer, contentType };
+    } catch {
+      // try next candidate directory
     }
-    return { buffer, contentType };
-  } catch {
-    return null;
   }
+  return null;
 }
 
 function writeDiskAvatar(cacheKey: string, buffer: Buffer, contentType: string, url: string): void {

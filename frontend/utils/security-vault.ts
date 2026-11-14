@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { writeJsonFileAtomic } from "@/lib/atomic-file";
+import { ensureWritableVaultDir, getCandidateVaultFilePaths } from "@/lib/vault-dir";
 
 export interface UserSecurityRecord {
   email: string;
@@ -48,15 +49,7 @@ export function isValidAdminSecret(candidate: string | null | undefined): boolea
 const memorySecurityRegistry = new Map<string, UserSecurityRecord>();
 
 function getSecurityVaultDir(): string {
-  try {
-    const dir = path.join(process.cwd(), ".zap_vault", "security");
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    return dir;
-  } catch {
-    return "";
-  }
+  return ensureWritableVaultDir("security");
 }
 
 function getSecurityFilePath(): string {
@@ -65,18 +58,18 @@ function getSecurityFilePath(): string {
 }
 
 export function loadRegistryFromFile(): Record<string, UserSecurityRecord> {
-  const filePath = getSecurityFilePath();
-  if (filePath && fs.existsSync(filePath)) {
-    try {
-      const raw = fs.readFileSync(filePath, "utf-8");
-      const parsed = JSON.parse(raw);
-      // Berkas kosong/rusak/null tidak boleh membuat seluruh operasi 500.
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, UserSecurityRecord>;
+  for (const filePath of getCandidateVaultFilePaths(["security"], "security_registry.json")) {
+    if (fs.existsSync(filePath)) {
+      try {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        const parsed = JSON.parse(raw);
+        // Berkas kosong/rusak/null tidak boleh membuat seluruh operasi 500.
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return parsed as Record<string, UserSecurityRecord>;
+        }
+      } catch {
+        // coba lokasi kandidat berikutnya
       }
-      return {};
-    } catch {
-      return {};
     }
   }
   return {};
@@ -175,22 +168,33 @@ function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
+const memoryUsedTokenHashes = new Map<string, number>();
+
 function loadUsedTokenHashes(): Record<string, number> {
-  const filePath = getUsedTokensFilePath();
-  if (filePath && fs.existsSync(filePath)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, number>;
+  const merged: Record<string, number> = {};
+  memoryUsedTokenHashes.forEach((exp, h) => {
+    merged[h] = exp;
+  });
+  for (const filePath of getCandidateVaultFilePaths(["security"], "used_recovery_tokens.json")) {
+    if (fs.existsSync(filePath)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          Object.assign(merged, parsed as Record<string, number>);
+        }
+      } catch {
+        // coba lokasi kandidat berikutnya
       }
-    } catch {
-      return {};
     }
   }
-  return {};
+  return merged;
 }
 
 function saveUsedTokenHashes(data: Record<string, number>) {
+  memoryUsedTokenHashes.clear();
+  for (const [h, exp] of Object.entries(data)) {
+    memoryUsedTokenHashes.set(h, exp);
+  }
   const filePath = getUsedTokensFilePath();
   if (!filePath) return;
   try {

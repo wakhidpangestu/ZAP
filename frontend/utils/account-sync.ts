@@ -346,11 +346,37 @@ export async function syncAccountBackup(
   // 1. Simpan salinan lokal terisolasi per akun pengguna (tanpa rahasia)
   try {
     const userStorageKey = `zap_user_backup_${userEmail}`;
-    localStorage.setItem(userStorageKey, JSON.stringify(publicPayload));
+    try {
+      localStorage.setItem(userStorageKey, JSON.stringify(publicPayload));
+    } catch {
+      // Jika kuota penuh akibat lampiran gambar base64, simpan backup lokal tanpa media inline besar
+      const compactConvs = taggedConvs.map((c: any) => ({
+        ...c,
+        messages: Array.isArray(c.messages)
+          ? c.messages.map((m: any) =>
+              Array.isArray(m?.attachedFiles)
+                ? {
+                    ...m,
+                    attachedFiles: m.attachedFiles.map((f: any) =>
+                      f && typeof f === "object"
+                        ? { id: f.id, name: f.name, size: f.size, type: f.type }
+                        : f
+                    ),
+                  }
+                : m
+            )
+          : c.messages,
+      }));
+      localStorage.setItem(userStorageKey, JSON.stringify({ ...publicPayload, conversations: compactConvs }));
+    }
 
     const userConvKey = getUserStorageKey(userEmail);
     const convsStr = JSON.stringify(taggedConvs);
-    localStorage.setItem(userConvKey, convsStr);
+    try {
+      localStorage.setItem(userConvKey, convsStr);
+    } catch {
+      // saveConversations sudah punya fallback kuota; abaikan kegagalan duplikat di sini
+    }
 
     // Sinkronkan key aktif saat ini (tanpa mengotori key global)
     localStorage.setItem("zap_last_active_user_email", userEmail);
@@ -415,6 +441,9 @@ export async function syncAccountBackup(
       }),
       signal: AbortSignal.timeout(15000),
     });
+    if (res.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("zap_sync_auth_expired", { detail: { email: userEmail } }));
+    }
     return res.ok;
   } catch (netErr) {
     console.warn("Gagal sinkronisasi cloud akun (offline mode):", netErr);
@@ -458,6 +487,9 @@ export async function restoreAccountData<M = unknown, C = unknown, W = unknown, 
         headers: { Authorization: `Bearer ${idToken}` },
         signal: AbortSignal.timeout(6000),
       });
+      if (res.status === 401 && typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("zap_sync_auth_expired", { detail: { email: userEmail } }));
+      }
       if (res.ok) {
         const json = await res.json();
         if (json.exists && json.data) {

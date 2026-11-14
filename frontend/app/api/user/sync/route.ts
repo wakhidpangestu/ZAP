@@ -4,6 +4,11 @@ import path from "path";
 import { rateLimitByIp } from "@/utils/rate-limit";
 import { writeJsonFileAtomic } from "@/lib/atomic-file";
 import { verifyAccountSession } from "@/lib/account-session";
+import {
+  getCandidateVaultDirs,
+  getCandidateVaultFilePaths,
+  getWritableVaultFilePath,
+} from "@/lib/vault-dir";
 
 // Batas ukuran body sinkronisasi (backup terbesar di disk saat ini ~3 MB).
 // Tanpa batas, satu klien dapat menulis berkas vault berukuran sembarang dan
@@ -259,18 +264,6 @@ function assertEmailMatches(identityEmail: string, targetEmail: string): NextRes
 // Serverless-safe fallback in-memory store for environments with read-only filesystems (Vercel, Cloudflare, Lambda)
 const memoryVault = new Map<string, VaultData>();
 
-function getVaultDir(): string {
-  try {
-    const dir = path.join(process.cwd(), ".zap_vault", "users");
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    return dir;
-  } catch {
-    return "";
-  }
-}
-
 function getVaultSafeKey(email: string, userId: string): string {
   const rawKey = (email || userId || "anonymous").trim().toLowerCase();
   return rawKey
@@ -283,14 +276,27 @@ function getVaultSafeKey(email: string, userId: string): string {
 function getVaultFilePath(email: string, userId: string): string {
   const safeKey = getVaultSafeKey(email, userId);
   if (!safeKey) return "";
-  const dir = getVaultDir();
-  if (!dir) return "";
-  const targetPath = path.resolve(dir, `${safeKey}.json`);
-  const resolvedDir = path.resolve(dir);
-  if (!targetPath.startsWith(resolvedDir + path.sep)) {
-    return "";
+  return getWritableVaultFilePath(["users"], `${safeKey}.json`);
+}
+
+function readExistingVaultData(safeKey: string): VaultData | null {
+  const cached = memoryVault.get(safeKey);
+  if (cached) return cached;
+  for (const candidate of getCandidateVaultFilePaths(["users"], `${safeKey}.json`)) {
+    if (fs.existsSync(candidate)) {
+      try {
+        const raw = fs.readFileSync(candidate, "utf-8");
+        const parsed = JSON.parse(raw) as VaultData;
+        if (parsed && typeof parsed === "object") {
+          memoryVault.set(safeKey, parsed);
+          return parsed;
+        }
+      } catch (err) {
+        console.warn("Gagal membaca file vault:", err);
+      }
+    }
   }
-  return targetPath;
+  return null;
 }
 
 // GET: Ambil backup data pengguna (identitas diambil dari Google ID token)
@@ -310,18 +316,7 @@ export async function GET(req: Request) {
     // Identitas otoritatif = email dari token terverifikasi, bukan parameter.
     const identityEmail = auth.email;
     const safeKey = getVaultSafeKey(identityEmail, "");
-    const filePath = getVaultFilePath(identityEmail, "");
-    let data: VaultData | null = memoryVault.get(safeKey) || null;
-
-    if (!data && filePath && fs.existsSync(filePath)) {
-      try {
-        const raw = fs.readFileSync(filePath, "utf-8");
-        data = JSON.parse(raw);
-        if (data) memoryVault.set(safeKey, data);
-      } catch (err) {
-        console.warn("Gagal membaca file vault:", err);
-      }
-    }
+    const data: VaultData | null = readExistingVaultData(safeKey);
 
     if (!data) {
       return NextResponse.json(
@@ -402,16 +397,7 @@ export async function POST(req: Request) {
 
     const safeKey = getVaultSafeKey(user.email, user.id);
     const filePath = getVaultFilePath(user.email, user.id);
-    let existingData: VaultData = memoryVault.get(safeKey) || {};
-
-    if ((!existingData || Object.keys(existingData).length === 0) && filePath && fs.existsSync(filePath)) {
-      try {
-        const raw = fs.readFileSync(filePath, "utf-8");
-        existingData = JSON.parse(raw);
-      } catch (parseErr) {
-        console.warn("Gagal membaca data existing, akan ditimpa:", parseErr);
-      }
-    }
+    const existingData: VaultData = readExistingVaultData(safeKey) || {};
 
     // ---- Jalur ZERO-KNOWLEDGE -------------------------------------------------
     // Klien mengirim vault yang sudah dienkripsi (AES-GCM) dengan kunci yang
@@ -653,27 +639,28 @@ export async function DELETE(req: Request) {
     // respons publik /api/chat/share — sehingga pengguna terautentikasi mana
     // pun dapat menghapus tautan publik pengguna lain. Tautan lama tanpa
     // authorEmail sengaja dilewati (tidak dapat dibuktikan kepemilikannya).
-    try {
-      const sharesDir = path.join(process.cwd(), ".zap_vault", "shares");
-      if (fs.existsSync(sharesDir)) {
-        const shareFiles = fs.readdirSync(sharesDir);
-        for (const sf of shareFiles) {
-          if (!sf.endsWith(".json")) continue;
-          try {
-            const sPath = path.join(sharesDir, sf);
-            const sRaw = fs.readFileSync(sPath, "utf-8");
-            const sData = JSON.parse(sRaw);
-            const ownerEmail =
-              typeof sData?.authorEmail === "string"
-                ? sData.authorEmail.trim().toLowerCase()
-                : "";
-            if (sData?.conversationId === convId && ownerEmail && ownerEmail === identityEmail) {
-              fs.unlinkSync(sPath);
-            }
-          } catch {}
+    for (const sharesDir of getCandidateVaultDirs("shares")) {
+      try {
+        if (fs.existsSync(sharesDir)) {
+          const shareFiles = fs.readdirSync(sharesDir);
+          for (const sf of shareFiles) {
+            if (!sf.endsWith(".json")) continue;
+            try {
+              const sPath = path.join(sharesDir, sf);
+              const sRaw = fs.readFileSync(sPath, "utf-8");
+              const sData = JSON.parse(sRaw);
+              const ownerEmail =
+                typeof sData?.authorEmail === "string"
+                  ? sData.authorEmail.trim().toLowerCase()
+                  : "";
+              if (sData?.conversationId === convId && ownerEmail && ownerEmail === identityEmail) {
+                fs.unlinkSync(sPath);
+              }
+            } catch {}
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
 
     return NextResponse.json({
       success: true,
