@@ -17,6 +17,7 @@ const nextConfig = {
   },
   experimental: {
     optimizePackageImports: ["framer-motion", "lucide-react"],
+    serverComponentsExternalPackages: ["pg"],
   },
   transpilePackages: ["katex", "react-katex", "three"],
   webpack: (config, { dev }) => {

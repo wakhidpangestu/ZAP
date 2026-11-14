@@ -4,6 +4,7 @@ import path from "path";
 import { rateLimitByIp } from "@/utils/rate-limit";
 import { writeJsonFileAtomic } from "@/lib/atomic-file";
 import { verifyAccountSession } from "@/lib/account-session";
+import { kvDelete, kvGet, kvListNamespace, kvSet } from "@/lib/kv-store";
 import {
   getCandidateVaultDirs,
   getCandidateVaultFilePaths,
@@ -299,6 +300,20 @@ function readExistingVaultData(safeKey: string): VaultData | null {
   return null;
 }
 
+async function readExistingVaultDataAsync(safeKey: string): Promise<VaultData | null> {
+  const local = readExistingVaultData(safeKey);
+  const remote = await kvGet<VaultData>("users", safeKey);
+  if (remote && typeof remote === "object") {
+    const localUpdated = typeof local?.updatedAt === "number" ? local.updatedAt : 0;
+    const remoteUpdated = typeof remote.updatedAt === "number" ? remote.updatedAt : 0;
+    if (!local || remoteUpdated > localUpdated) {
+      memoryVault.set(safeKey, remote);
+      return remote;
+    }
+  }
+  return local;
+}
+
 // GET: Ambil backup data pengguna (identitas diambil dari Google ID token)
 export async function GET(req: Request) {
   try {
@@ -316,7 +331,7 @@ export async function GET(req: Request) {
     // Identitas otoritatif = email dari token terverifikasi, bukan parameter.
     const identityEmail = auth.email;
     const safeKey = getVaultSafeKey(identityEmail, "");
-    const data: VaultData | null = readExistingVaultData(safeKey);
+    const data: VaultData | null = await readExistingVaultDataAsync(safeKey);
 
     if (!data) {
       return NextResponse.json(
@@ -397,7 +412,7 @@ export async function POST(req: Request) {
 
     const safeKey = getVaultSafeKey(user.email, user.id);
     const filePath = getVaultFilePath(user.email, user.id);
-    const existingData: VaultData = readExistingVaultData(safeKey) || {};
+    const existingData: VaultData = (await readExistingVaultDataAsync(safeKey)) || {};
 
     // ---- Jalur ZERO-KNOWLEDGE -------------------------------------------------
     // Klien mengirim vault yang sudah dienkripsi (AES-GCM) dengan kunci yang
@@ -431,6 +446,7 @@ export async function POST(req: Request) {
         updatedAt: Date.now(),
       };
       memoryVault.set(safeKey, encryptedPayload);
+      await kvSet("users", safeKey, encryptedPayload);
       if (filePath) {
         try {
           writeJsonFileAtomic(filePath, encryptedPayload);
@@ -553,6 +569,7 @@ export async function POST(req: Request) {
     };
 
     memoryVault.set(safeKey, payloadToSave);
+    await kvSet("users", safeKey, payloadToSave);
 
     if (filePath) {
       try {
@@ -617,6 +634,13 @@ export async function DELETE(req: Request) {
       memoryVault.set(safeKey, memData);
     }
 
+    const dbData = await kvGet<VaultData>("users", safeKey);
+    if (dbData && Array.isArray(dbData.conversations)) {
+      dbData.conversations = dbData.conversations.filter((c) => c.id !== convId);
+      dbData.updatedAt = Date.now();
+      await kvSet("users", safeKey, sanitizeVaultData(dbData));
+    }
+
     const filePath = getVaultFilePath(identityEmail, "");
     if (filePath && fs.existsSync(filePath)) {
       try {
@@ -660,6 +684,17 @@ export async function DELETE(req: Request) {
           }
         }
       } catch {}
+    }
+
+    const dbShares = await kvListNamespace<{ conversationId?: string; authorEmail?: string }>("shares");
+    for (const row of dbShares) {
+      const ownerEmail =
+        typeof row.value?.authorEmail === "string"
+          ? row.value.authorEmail.trim().toLowerCase()
+          : "";
+      if (row.value?.conversationId === convId && ownerEmail && ownerEmail === identityEmail) {
+        await kvDelete("shares", row.key);
+      }
     }
 
     return NextResponse.json({

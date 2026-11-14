@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { writeJsonFileAtomic } from "@/lib/atomic-file";
+import { kvSet } from "@/lib/kv-store";
 import { ensureWritableVaultDir, getCandidateVaultFilePaths } from "@/lib/vault-dir";
 
 export interface UserSecurityRecord {
@@ -76,6 +77,7 @@ export function loadRegistryFromFile(): Record<string, UserSecurityRecord> {
 }
 
 function saveRegistryToFile(data: Record<string, UserSecurityRecord>) {
+  void kvSet("security", "registry", data);
   const filePath = getSecurityFilePath();
   if (filePath) {
     try {
@@ -191,6 +193,7 @@ function loadUsedTokenHashes(): Record<string, number> {
 }
 
 function saveUsedTokenHashes(data: Record<string, number>) {
+  void kvSet("security", "used_recovery_tokens", data);
   memoryUsedTokenHashes.clear();
   for (const [h, exp] of Object.entries(data)) {
     memoryUsedTokenHashes.set(h, exp);

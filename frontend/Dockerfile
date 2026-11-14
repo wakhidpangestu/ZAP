@@ -37,6 +37,10 @@ ENV HOSTNAME="0.0.0.0"
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
+# Pre-create writable vault directories for nextjs user (UID 1001)
+RUN mkdir -p /app/.zap_vault/users /app/.zap_vault/shares /app/.zap_vault/avatars /app/.zap_vault/security \
+    && chown -R nextjs:nodejs /app/.zap_vault
+
 # Copy static assets and standalone server
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./

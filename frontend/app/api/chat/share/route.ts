@@ -5,6 +5,7 @@ import { writeJsonFileAtomic } from "@/lib/atomic-file";
 import { getCandidateVaultFilePaths, getWritableVaultFilePath } from "@/lib/vault-dir";
 import { rateLimitByIp } from "@/utils/rate-limit";
 import { verifyBearerIdentity } from "@/lib/account-session";
+import { kvGet, kvSet } from "@/lib/kv-store";
 
 interface ShareMessage {
   id: string;
@@ -100,6 +101,17 @@ function loadSharePayload(cleanId: string): SharedConversationPayload | null {
   return memoryShares.get(cleanId) || null;
 }
 
+async function loadSharePayloadAsync(cleanId: string): Promise<SharedConversationPayload | null> {
+  const local = loadSharePayload(cleanId);
+  if (local) return local;
+  const fromDb = await kvGet<SharedConversationPayload>("shares", cleanId);
+  if (fromDb && typeof fromDb === "object") {
+    rememberShare(cleanId, fromDb);
+    return fromDb;
+  }
+  return null;
+}
+
 // GET /api/chat/share?id=<shareId>
 export async function GET(req: Request) {
   try {
@@ -129,7 +141,7 @@ export async function GET(req: Request) {
       );
     }
 
-    const data = loadSharePayload(cleanId);
+    const data = await loadSharePayloadAsync(cleanId);
     if (data) {
       // Verifikasi status publik: jika pemilik mematikan public share, blokir akses!
       if (!data.isPublic) {
@@ -271,15 +283,16 @@ export async function POST(req: Request) {
     // Jika ini adalah permintaan untuk menonaktifkan share yang sudah ada:
     if (requestedShareId && isPublic === false) {
       const cleanId = requestedShareId.trim().toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 64);
-      const existing = loadSharePayload(cleanId);
+      const existing = await loadSharePayloadAsync(cleanId);
       if (existing) {
         const ownershipError = await assertOwnership(existing);
         if (ownershipError) return ownershipError;
         existing.isPublic = false;
         existing.updatedAt = Date.now();
         rememberShare(cleanId, existing);
+        await kvSet("shares", cleanId, existing);
         const filePath = getShareFilePath(cleanId);
-        // Atomik: tulis ke disk bila writable; pada filesystem read-only tetap tersimpan di memori.
+        // Atomik: tulis ke disk bila writable; pada filesystem read-only tetap tersimpan di memori/DB.
         if (filePath) {
           writeJsonFileAtomic(filePath, existing);
         }
@@ -316,8 +329,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "shareId tidak valid." }, { status: 400 });
     }
 
-    // Jika share sudah ada (baik di disk maupun di memori), hanya pemilik terverifikasi yang bisa memperbarui
-    const existingData = loadSharePayload(shareId);
+    // Jika share sudah ada (baik di disk, memori, maupun PostgreSQL), hanya pemilik terverifikasi yang bisa memperbarui
+    const existingData = await loadSharePayloadAsync(shareId);
     if (existingData) {
       const ownershipError = await assertOwnership(existingData);
       if (ownershipError) return ownershipError;
@@ -374,6 +387,7 @@ export async function POST(req: Request) {
     };
 
     rememberShare(shareId, payload);
+    await kvSet("shares", shareId, payload);
     if (filePath) {
       writeJsonFileAtomic(filePath, payload);
     }

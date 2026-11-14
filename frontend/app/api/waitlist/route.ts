@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import { rateLimitByIp } from "@/utils/rate-limit";
 import { writeJsonFileAtomic } from "@/lib/atomic-file";
+import { kvGet, kvSet } from "@/lib/kv-store";
 import { getCandidateVaultFilePaths, getWritableVaultFilePath } from "@/lib/vault-dir";
 
 interface WaitlistEntry {
@@ -89,7 +90,8 @@ export async function POST(req: Request) {
   }
 
   const entries = readEntries();
-  const alreadyRegistered = entries.some((entry) => entry.email === email);
+  const existingDb = await kvGet<WaitlistEntry>("waitlist", email);
+  const alreadyRegistered = Boolean(existingDb) || entries.some((entry) => entry.email === email);
   if (alreadyRegistered) {
     return NextResponse.json({ ok: true, duplicate: true });
   }
@@ -100,13 +102,15 @@ export async function POST(req: Request) {
     );
   }
 
-  entries.push({
+  const newEntry: WaitlistEntry = {
     name: name.slice(0, 120),
     email,
     ...(product ? { product } : {}),
     createdAt: Date.now(),
-  });
+  };
+  entries.push(newEntry);
   writeEntries(entries);
+  await kvSet("waitlist", email, newEntry);
 
   return NextResponse.json({ ok: true });
 }

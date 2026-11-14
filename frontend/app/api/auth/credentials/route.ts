@@ -4,6 +4,7 @@ import fs from "fs";
 import { rateLimitByIp } from "@/utils/rate-limit";
 import { writeJsonFileAtomic } from "@/lib/atomic-file";
 import { createAccountSession } from "@/lib/account-session";
+import { kvGet, kvSet } from "@/lib/kv-store";
 import { getCandidateVaultFilePaths, getWritableVaultFilePath } from "@/lib/vault-dir";
 
 interface StoredAccount {
@@ -114,6 +115,13 @@ export async function POST(req: Request) {
     }
 
     const accounts = loadAccounts();
+    if (!accounts[rawEmail]) {
+      const fromDb = await kvGet<StoredAccount>("accounts", rawEmail);
+      if (fromDb && typeof fromDb === "object") {
+        accounts[rawEmail] = fromDb;
+        memoryAccounts.set(rawEmail, fromDb);
+      }
+    }
 
     if (action === "signup") {
       if (!name || name.length < 2) {
@@ -150,6 +158,7 @@ export async function POST(req: Request) {
 
       accounts[rawEmail] = newAccount;
       saveAccounts(accounts);
+      await kvSet("accounts", rawEmail, newAccount);
 
       // Token sesi untuk sinkronisasi vault terenkripsi (tanpa kata sandi).
       const session = createAccountSession(newAccount.email);

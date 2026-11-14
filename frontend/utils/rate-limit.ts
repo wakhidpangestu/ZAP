@@ -10,7 +10,25 @@ interface RateLimitResult {
   retryAfterSeconds: number;
 }
 
+const MAX_BUCKETS = 5000;
 const buckets = new Map<string, number[]>();
+
+function pruneBuckets(now: number, windowMs: number) {
+  const oldestAllowed = now - windowMs;
+  buckets.forEach((timestamps, k) => {
+    const recent = timestamps.filter((t: number) => t > oldestAllowed);
+    if (recent.length === 0) {
+      buckets.delete(k);
+    } else if (recent.length !== timestamps.length) {
+      buckets.set(k, recent);
+    }
+  });
+  while (buckets.size >= MAX_BUCKETS) {
+    const oldestKey = buckets.keys().next().value;
+    if (oldestKey === undefined) break;
+    buckets.delete(oldestKey);
+  }
+}
 
 export function rateLimitCheck(
   key: string,
@@ -19,7 +37,15 @@ export function rateLimitCheck(
 ): RateLimitResult {
   const now = Date.now();
   const windowStart = now - windowMs;
-  const hits = (buckets.get(key) || []).filter((t) => t > windowStart);
+  if (buckets.size >= MAX_BUCKETS && !buckets.has(key)) {
+    pruneBuckets(now, windowMs);
+  }
+  const existing = buckets.get(key);
+  const hits = existing ? existing.filter((t) => t > windowStart) : [];
+  // Refresh insertion order for bounded LRU-style eviction
+  if (existing) {
+    buckets.delete(key);
+  }
 
   if (hits.length >= limit) {
     const retryAfterSeconds = Math.max(
@@ -33,6 +59,10 @@ export function rateLimitCheck(
   hits.push(now);
   buckets.set(key, hits);
   return { allowed: true, remaining: limit - hits.length, retryAfterSeconds: 0 };
+}
+
+export function clearRateLimitBuckets() {
+  buckets.clear();
 }
 
 /** Mengambil IP klien dari header proxy standar. */
