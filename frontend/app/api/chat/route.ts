@@ -4,6 +4,7 @@ import { getUserSecurityStatus, recordUserSecurityViolation } from "@/utils/secu
 import { cleanModelResponse, finalizeModelReply, sanitizeZeroAnswer } from "@/lib/zero-answer";
 import { rateLimitByIp } from "@/utils/rate-limit";
 import { verifyBearerIdentity } from "@/lib/account-session";
+import { extractPdfTextFromDataUrl } from "@/lib/pdf-extract";
 
 interface ActiveProblemContext {
   steps?: string[];
@@ -182,6 +183,7 @@ interface ChatRequestBody {
   conversationHistory?: { role: "user" | "assistant"; content: string }[];
   activeProblem?: ActiveProblemContext | null;
   attachedFiles?: Array<{ name: string; content?: string; type?: string; dataUrl?: string }>;
+  recentImages?: Array<{ name: string; content?: string; type?: string; dataUrl?: string }>;
   workspaceMode?: "write" | "read";
   interactionMode?: "standard" | "strict" | "visual" | "cas";
   reasoningEffort?: "low" | "medium" | "high";
@@ -269,6 +271,14 @@ type BazaarLinkCallResult = UniversalCallResult;
 /** Callback potongan teks (streaming) yang diteruskan ke peramban. */
 type DeltaSink = (chunk: string) => void;
 
+function getTokenBudget(
+  reasoningEffort?: "low" | "medium" | "high",
+  isMultimodal: boolean = false
+): number {
+  const base = reasoningEffort === "low" ? 1200 : reasoningEffort === "high" ? 3600 : 2048;
+  return isMultimodal ? Math.min(4096, base + 512) : base;
+}
+
 /**
  * Membaca respons SSE dari endpoint kompatibel OpenAI (`stream: true`) dan
  * mengembalikan teks lengkapnya sambil meneruskan setiap potongan ke `onDelta`.
@@ -283,6 +293,7 @@ async function consumeOpenAICompatibleStream(res: Response, onDelta: DeltaSink):
   const decoder = new TextDecoder();
   let buffer = "";
   let full = "";
+  let reasoningFallback = "";
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -298,13 +309,15 @@ async function consumeOpenAICompatibleStream(res: Response, onDelta: DeltaSink):
         if (!payload || payload === "[DONE]") continue;
         try {
           const frame = JSON.parse(payload);
-          const delta =
-            frame?.choices?.[0]?.delta?.content ??
-            frame?.choices?.[0]?.message?.content ??
-            "";
+          const deltaObj = frame?.choices?.[0]?.delta;
+          const msgObj = frame?.choices?.[0]?.message;
+          const delta = deltaObj?.content ?? msgObj?.content ?? "";
+          const reasoningDelta = deltaObj?.reasoning_content ?? msgObj?.reasoning_content ?? "";
           if (typeof delta === "string" && delta) {
             full += delta;
             onDelta(delta);
+          } else if (typeof reasoningDelta === "string" && reasoningDelta) {
+            reasoningFallback += reasoningDelta;
           }
         } catch {
           // Frame terpotong / bukan JSON: abaikan, frame berikutnya menyusul.
@@ -316,7 +329,8 @@ async function consumeOpenAICompatibleStream(res: Response, onDelta: DeltaSink):
       reader.releaseLock();
     } catch {}
   }
-  return full;
+  if (full.trim()) return full;
+  return reasoningFallback.trim() ? cleanModelResponse(reasoningFallback) : "";
 }
 
 
@@ -739,6 +753,7 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
     const {
       message: rawMessage,
       attachedFiles,
+      recentImages: rawRecentImages,
       conversationHistory,
       activeProblem: rawActiveProblem,
       apiKey,
@@ -876,6 +891,26 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
     let message = rawMessage;
     const textAttachments: Array<{ name: string; content: string }> = [];
     const imageAttachments: AttachedImageItem[] = [];
+    const pdfInlineDocs: AttachedImageItem[] = [];
+    let isCarriedImageContext = false;
+
+    const parseImageAttachment = (f: { name: string; content?: string; type?: string; dataUrl?: string }): AttachedImageItem | null => {
+      const rawContent = f.dataUrl || f.content || "";
+      const dataUrlMatch = rawContent.match(/^data:(image\/[a-zA-Z0-9.+-]+)(?:;[^,]+)*;base64,([\s\S]+)$/i);
+      if (!dataUrlMatch) return null;
+      const rawMime = dataUrlMatch[1].toLowerCase();
+      const mimeType = rawMime === "image/jpg" ? "image/jpeg" : rawMime;
+      const pureBase64 = dataUrlMatch[2].replace(/\s+/g, "");
+      if (!pureBase64) return null;
+      return {
+        name: f.name || "gambar.jpg",
+        dataUrl: `data:${mimeType};base64,${pureBase64}`,
+        mimeType,
+        pureBase64,
+      };
+    };
+
+    const contexts: string[] = [];
 
     if (attachedFiles && Array.isArray(attachedFiles) && attachedFiles.length > 0) {
       for (const f of attachedFiles) {
@@ -885,50 +920,86 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
           Boolean(f.type?.startsWith("image/")) ||
           rawContent.startsWith("data:image/") ||
           /\.(png|jpe?g|webp|gif|bmp|svg|heic|heif|avif|tiff?)$/i.test(f.name);
+        const isPdf =
+          f.type === "application/pdf" ||
+          rawContent.startsWith("data:application/pdf") ||
+          /\.pdf$/i.test(f.name);
 
         if (isImage && rawContent.startsWith("data:image/")) {
-          const dataUrlMatch = rawContent.match(/^data:(image\/[a-zA-Z0-9.+-]+)(?:;[^,]+)*;base64,([\s\S]+)$/i);
-          if (dataUrlMatch) {
-            const rawMime = dataUrlMatch[1].toLowerCase();
-            const mimeType = rawMime === "image/jpg" ? "image/jpeg" : rawMime;
-            const pureBase64 = dataUrlMatch[2].replace(/\s+/g, "");
-            imageAttachments.push({
-              name: f.name,
-              dataUrl: `data:${mimeType};base64,${pureBase64}`,
-              mimeType,
-              pureBase64,
-            });
+          const parsedImg = parseImageAttachment(f);
+          if (parsedImg) {
+            imageAttachments.push(parsedImg);
           } else {
             textAttachments.push({
               name: f.name,
-              content: rawContent.slice(0, 4000),
+              content: "[Gambar terlampir tidak dapat didekode]",
             });
           }
+        } else if (isPdf && rawContent.startsWith("data:application/pdf")) {
+          const pdfExtracted = await extractPdfTextFromDataUrl(rawContent, 12_000);
+          if (pdfExtracted.pureBase64) {
+            pdfInlineDocs.push({
+              name: f.name,
+              dataUrl: `data:application/pdf;base64,${pdfExtracted.pureBase64}`,
+              mimeType: "application/pdf",
+              pureBase64: pdfExtracted.pureBase64,
+            });
+          }
+          textAttachments.push({
+            name: f.name,
+            content: pdfExtracted.text
+              ? `[Dokumen PDF ${pdfExtracted.pageCount || 1} halaman — teks terekstrak]\n${pdfExtracted.text}`
+              : `[Dokumen PDF "${f.name}" terlampir, tetapi tidak ditemukan lapisan teks langsung (kemungkinan PDF hasil pindaian gambar/scan).]`,
+          });
         } else {
           textAttachments.push({
             name: f.name,
-            content: rawContent.slice(0, 4000),
+            content: rawContent.slice(0, 6000),
           });
         }
       }
+    }
 
-      const contexts: string[] = [];
-      if (textAttachments.length > 0) {
-        contexts.push(
-          textAttachments
-            .map((f) => `--- BERKAS TERLAMPIR: ${f.name} ---\n${f.content}`)
-            .join("\n\n")
-        );
-      }
-      if (imageAttachments.length > 0) {
-        contexts.push(
-          `[INFO LAMPIRAN GAMBAR/SOAL]: Pengguna melampirkan ${imageAttachments.length} gambar (${imageAttachments.map((i) => i.name).join(", ")}). Analisis aljabar, coretan matematika, atau geometri pada gambar secara teliti.`
-        );
-      }
-      if (contexts.length > 0) {
-        message = `${contexts.join("\n\n")}\n\n--- PERINTAH PENGGUNA ---\n${rawMessage}`;
+    // Konteks Visual Multi-Turn: bila pengguna bertanya lanjutan tanpa mengunggah foto baru,
+    // teruskan maksimal 2 gambar terbaru dari riwayat percakapan yang sama.
+    if (imageAttachments.length === 0 && Array.isArray(rawRecentImages) && rawRecentImages.length > 0) {
+      for (const item of rawRecentImages.slice(0, 2)) {
+        if (!item) continue;
+        const parsed = parseImageAttachment(item);
+        if (parsed) {
+          imageAttachments.push(parsed);
+          isCarriedImageContext = true;
+        }
       }
     }
+
+    if (textAttachments.length > 0) {
+      contexts.push(
+        textAttachments
+          .map((f) => `--- BERKAS TERLAMPIR: ${f.name} ---\n${f.content}`)
+          .join("\n\n")
+      );
+    }
+    if (pdfInlineDocs.length > 0) {
+      contexts.push(
+        `[INFO LAMPIRAN PDF]: Pengguna melampirkan ${pdfInlineDocs.length} dokumen PDF (${pdfInlineDocs.map((p) => p.name).join(", ")}). Gunakan isi teks terekstrak (atau halaman PDF bila mendukung multimodal) untuk membimbing pengguna secara Sokratik.`
+      );
+    }
+    if (imageAttachments.length > 0) {
+      contexts.push(
+        isCarriedImageContext
+          ? `[KONTEKS GAMBAR SEBELUMNYA TERLAMPIR]: Pengguna mengajukan pertanyaan lanjutan terkait ${imageAttachments.length} gambar sebelumnya (${imageAttachments.map((i) => i.name).join(", ")}). Pertahankan rujukan visual terhadap gambar tersebut.`
+          : `[INFO LAMPIRAN GAMBAR/SOAL]: Pengguna melampirkan ${imageAttachments.length} gambar (${imageAttachments.map((i) => i.name).join(", ")}). Analisis aljabar, coretan matematika, atau geometri pada gambar secara teliti.`
+      );
+    }
+    if (contexts.length > 0) {
+      message = `${contexts.join("\n\n")}\n\n--- PERINTAH PENGGUNA ---\n${rawMessage}`;
+    }
+
+    const maxTokensBudget = getTokenBudget(
+      reasoningEffort,
+      imageAttachments.length > 0 || pdfInlineDocs.length > 0
+    );
 
     // Kunci API efektif untuk model Gemini & Multimodal Vision
     const effectiveGeminiKey =
@@ -1013,7 +1084,8 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
             "bazaarlink-deepseek",
             userName,
             "DeepSeek V4.1 Flash",
-            sessionLanguage
+            sessionLanguage,
+            maxTokensBudget
           );
           if (bazaarRes.text) {
             return NextResponse.json({
@@ -1052,10 +1124,12 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
           conversationHistory,
           activeProblem,
           userName,
-          nimDeepSeekImages.length > 0 ? 20000 : 8000,
+          nimDeepSeekImages.length > 0 ? 20000 : 12000,
           sessionLanguage,
           deepSeekLabel,
-          nimDeepSeekImages
+          nimDeepSeekImages,
+          sink,
+          maxTokensBudget
         );
         if (nvidiaRes.text) {
           return NextResponse.json({
@@ -1103,8 +1177,8 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
       );
 
       if (!modelId || modelId === "auto-agent") {
-        if (imageAttachments.length > 0) {
-          // ROUTING CERDAS MULTIMODAL: Jika user melampirkan foto/gambar, arahkan ke model Vision
+        if (imageAttachments.length > 0 || pdfInlineDocs.length > 0) {
+          // ROUTING CERDAS MULTIMODAL: Jika user melampirkan foto/gambar/PDF, arahkan ke model Vision
           if (effectiveGeminiKey) {
             try {
               const geminiVisionRes = await callGeminiAPI(
@@ -1115,7 +1189,8 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
                 "gemini-2.0-flash",
                 userName,
                 sessionLanguage,
-                imageAttachments
+                [...imageAttachments, ...pdfInlineDocs],
+                maxTokensBudget
               );
               if (geminiVisionRes.text) {
                 return NextResponse.json({
@@ -1128,8 +1203,13 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
               console.warn("Gemini vision router attempt failed, falling back to Super-VL:", vErr);
             }
           }
-          targetModel = "nvidia/nemotron-3.5-super-vl-120b-a12b";
-          targetFriendlyName = "Auto-Agent (Nemotron-3.5 Super-VL Vision)";
+          if (nimSupportedImages.length > 0) {
+            targetModel = "nvidia/nemotron-3.5-super-vl-120b-a12b";
+            targetFriendlyName = "Auto-Agent (Nemotron-3.5 Super-VL Vision)";
+          } else {
+            targetModel = "nvidia/nemotron-3.5-bolt-e4b";
+            targetFriendlyName = "Auto-Agent (Nemotron-3.5 Bolt Tutor)";
+          }
         } else {
           targetModel = "nvidia/nemotron-3.5-bolt-e4b";
           targetFriendlyName = "Auto-Agent (Nemotron-3.5 Bolt Tutor)";
@@ -1215,7 +1295,8 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
           nimSupportedImages,
           // Hanya percobaan pertama yang di-stream: retry setelah stream parsial
           // akan menduplikasi teks di layar pengguna.
-          sink
+          sink,
+          maxTokensBudget
         );
 
         // Jika kunci pengguna menghasilkan 401 atau gagal, otomatis coba dengan kunci sistem env
@@ -1233,7 +1314,9 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
             nvidiaTimeoutMs,
             sessionLanguage,
             targetFriendlyName,
-            nimSupportedImages
+            nimSupportedImages,
+            undefined,
+            maxTokensBudget
           );
         }
 
@@ -1257,7 +1340,9 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
             14000,
             sessionLanguage,
             "Nemotron-3.5 Bolt (Fast Fallback)",
-            nimSupportedImages
+            nimSupportedImages,
+            undefined,
+            maxTokensBudget
           );
           if (nvidiaRes.text) {
             targetFriendlyName = "Nemotron-3.5 Bolt (Fast Fallback)";
@@ -1303,6 +1388,9 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
         });
       }
       const targetModel = customModelName?.trim() || "llama3.3";
+      const customImages = imageAttachments.filter((img) =>
+        ["image/jpeg", "image/png", "image/webp"].includes(img.mimeType.toLowerCase())
+      );
       try {
         const customRes = await callCustomOpenAIAPI(
           message,
@@ -1312,11 +1400,12 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
           conversationHistory,
           activeProblem,
           userName,
-          12000,
+          customImages.length > 0 ? 20000 : 12000,
           sessionLanguage,
           undefined,
-          [],
-          sink
+          customImages,
+          sink,
+          maxTokensBudget
         );
 
         if (customRes.text) {
@@ -1357,7 +1446,8 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
             modelId,
             userName,
             sessionLanguage,
-            imageAttachments
+            imageAttachments,
+            maxTokensBudget
           );
           if (claudeRes.text) {
             return NextResponse.json({
@@ -1411,7 +1501,8 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
             userName,
             sessionLanguage,
             imageAttachments,
-            sink
+            sink,
+            maxTokensBudget
           );
           if (openaiRes.text) {
             return NextResponse.json({
@@ -1451,7 +1542,8 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
             "bazaarlink-deepseek",
             userName,
             persona,
-            sessionLanguage
+            sessionLanguage,
+            maxTokensBudget
           );
           if (bazaarRes.text) {
             return NextResponse.json({
@@ -1491,7 +1583,10 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
           conversationHistory,
           activeProblem,
           modelId,
-          userName
+          userName,
+          undefined,
+          sessionLanguage,
+          maxTokensBudget
         );
 
         if (blResult.text) {
@@ -1536,7 +1631,8 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
             activeProblem,
             modelId,
             userName,
-            sessionLanguage
+            sessionLanguage,
+            maxTokensBudget
           );
 
           if (mistralResult.text) {
@@ -1584,7 +1680,8 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
             modelId,
             userName,
             sessionLanguage,
-            imageAttachments
+            [...imageAttachments, ...pdfInlineDocs],
+            maxTokensBudget
           );
           
           if (geminiResult.text) {
@@ -1650,7 +1747,8 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
           sessionLanguage,
           undefined,
           [],
-          sink
+          sink,
+          maxTokensBudget
         );
         if (platformRes.text) {
           return NextResponse.json({
@@ -1832,7 +1930,8 @@ async function callGeminiAPI(
   modelId?: string,
   userName?: string,
   sessionLanguage: string = "Bahasa Indonesia",
-  images: AttachedImageItem[] = []
+  images: AttachedImageItem[] = [],
+  maxTokens: number = 2048
 ): Promise<GeminiCallResult> {
   const studentName = userName?.trim() || "Siswa";
   const systemInstructionText = buildZAPSystemPrompt(
@@ -1903,11 +2002,12 @@ async function callGeminiAPI(
     contents: contents,
     generationConfig: {
       temperature: 0.7,
-      maxOutputTokens: 800, // Cukup leluasa untuk penjelasan cerdas & mendalam
+      maxOutputTokens: maxTokens,
     },
   };
 
-  // Helper pemanggil model tunggal dengan batas timeout 5s
+  // Helper pemanggil model tunggal dengan batas timeout adaptif (multimodal vs teks)
+  const geminiTimeoutMs = images.length > 0 ? 18000 : 12000;
   const invokeModel = async (
     modelName: string
   ): Promise<{ success: boolean; text?: string; error?: string; status?: number }> => {
@@ -1921,7 +2021,7 @@ async function callGeminiAPI(
           "x-goog-api-key": apiKey,
         },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(geminiTimeoutMs),
       });
 
       if (res.ok) {
@@ -1972,7 +2072,7 @@ async function callGeminiAPI(
       {
         method: "GET",
         headers: { "x-goog-api-key": apiKey },
-        signal: AbortSignal.timeout(4000),
+        signal: AbortSignal.timeout(6000),
       }
     );
 
@@ -2032,7 +2132,8 @@ async function callMistralAPI(
   activeProblem?: ActiveProblemContext | null,
   modelId?: string,
   userName?: string,
-  sessionLanguage: string = "Bahasa Indonesia"
+  sessionLanguage: string = "Bahasa Indonesia",
+  maxTokens: number = 2048
 ): Promise<MistralCallResult> {
   const studentName = userName?.trim() || "Siswa";
   const targetModel =
@@ -2072,7 +2173,7 @@ async function callMistralAPI(
     model: targetModel,
     messages: messages,
     temperature: 0.7,
-    max_tokens: 800,
+    max_tokens: maxTokens,
   };
 
   const endpoints = [
@@ -2139,7 +2240,8 @@ async function callBazaarLinkAPI(
   modelId?: string,
   userName?: string,
   overridePersona?: string,
-  sessionLanguage: string = "Bahasa Indonesia"
+  sessionLanguage: string = "Bahasa Indonesia",
+  maxTokens: number = 2048
 ): Promise<BazaarLinkCallResult> {
   const studentName = userName?.trim() || "Siswa";
 
@@ -2190,7 +2292,7 @@ async function callBazaarLinkAPI(
     model: targetModel,
     messages: messages,
     temperature: 0.7,
-    max_tokens: 800,
+    max_tokens: maxTokens,
   };
 
   try {
@@ -2250,7 +2352,8 @@ async function callClaudeAPI(
   modelId?: string,
   userName?: string,
   sessionLanguage: string = "Bahasa Indonesia",
-  images: AttachedImageItem[] = []
+  images: AttachedImageItem[] = [],
+  maxTokens: number = 2048
 ): Promise<UniversalCallResult> {
   const studentName = userName?.trim() || "Siswa";
   const targetModel =
@@ -2304,10 +2407,10 @@ async function callClaudeAPI(
         model: targetModel,
         system: systemInstructionText,
         messages: messages,
-        max_tokens: 800,
+        max_tokens: maxTokens,
         temperature: 0.7,
       }),
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(15000),
     });
 
     if (res.ok) {
@@ -2341,7 +2444,8 @@ async function callOpenAIAPI(
   userName?: string,
   sessionLanguage: string = "Bahasa Indonesia",
   images: AttachedImageItem[] = [],
-  onDelta?: DeltaSink
+  onDelta?: DeltaSink,
+  maxTokens: number = 2048
 ): Promise<UniversalCallResult> {
   const studentName = userName?.trim() || "Siswa";
   const targetModel = modelId === "gpt-4o-mini" ? "gpt-4o-mini" : "gpt-4o";
@@ -2389,10 +2493,10 @@ async function callOpenAIAPI(
         model: targetModel,
         messages: messages,
         temperature: 0.7,
-        max_tokens: 800,
+        max_tokens: maxTokens,
         ...(onDelta ? { stream: true } : {}),
       }),
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(15000),
     });
 
     if (res.ok) {
@@ -2437,7 +2541,8 @@ async function callCustomOpenAIAPI(
   sessionLanguage: string = "Bahasa Indonesia",
   displayName?: string,
   images: AttachedImageItem[] = [],
-  onDelta?: DeltaSink
+  onDelta?: DeltaSink,
+  maxTokens: number = 2048
 ): Promise<UniversalCallResult> {
   const studentName = userName?.trim() || "Siswa";
   const cleanBase = (baseUrl || "http://localhost:11434/v1").replace(/\/+$/, "");
@@ -2488,7 +2593,7 @@ async function callCustomOpenAIAPI(
         model: targetModel,
         messages,
         temperature: 0.6,
-        max_tokens: 3000,
+        max_tokens: maxTokens,
         ...(onDelta ? { stream: true } : {}),
       }),
       signal: AbortSignal.timeout(timeoutMs),
