@@ -25,7 +25,7 @@ Sesuai ketentuan resmi **Guidebook LOGICODIX 2026 (Bab Submission & Ketentuan RE
 | **Subtema Hackathon** | **Smart & Fun Education** |
 | **Nama Aplikasi / Solusi** | **ZAP (Zero Answer Policy)** |
 | **Tautan Repositori GitHub**| [https://github.com/wakhidpangestu/ZAP](https://github.com/wakhidpangestu/ZAP) |
-| **Akses Demonstrasi Web** | [https://chatzap.xyz](https://chatzap.xyz) *(atau via Localhost `http://localhost:3000`)* |
+| **Akses Demonstrasi Web** | [https://chatzap.web.id](https://chatzap.web.id) *(Cermin: [chatzap.xyz](https://chatzap.xyz) / Localhost `http://localhost:3000`)* |
 
 ---
 
@@ -129,6 +129,43 @@ graph TD
 | **Database & Cache** | SQLite 3 (`zap_platform.db` & `zap_math_corpus.db`), LocalStorage | Public Domain | Penyimpanan pengguna terenkripsi, korpus materi ajar, memori episodik, dan sesi kerja. |
 | **Layanan AI Eksternal** | Google Gemini (2.0 Flash / 1.5 Flash), OpenAI, Mistral | Komersial API | Dialog pembimbing Sokratik berbasis arahan terstruktur. |
 
+### A. Frontend Documentation (Framework, Struktur Komponen UI & Aset)
+
+* **Framework:** Next.js 14 (App Router), React 18, TypeScript 5, Tailwind CSS v3, Three.js 0.187.
+* **Struktur Komponen UI Utama (`frontend/components/`):**
+  * `InteractiveCanvas3D.tsx`: Komponen utama kanvas 3D spasial Three.js WebGL, Papan Tulis Pintar 3-in-1 (3D solid, 2D calculus curves, chalkboard), orbit controls, dan kursor kolaboratif multi-pengguna.
+  * `landing/ZapChatPreview.tsx` & `ZapChatScrollHero.tsx`: Pratinjau dialog Sokratik interaktif dan scroll hero showcase modern.
+  * `MathView.tsx`: Renderer persamaan matematika KaTeX berlatensi rendah di sisi peramban.
+  * `ModelPicker.tsx`: Antarmuka pemilihan model AI (Gemini 2.0 Flash bawaan, Claude, OpenAI GPT-4o, Ollama lokal) dengan enkripsi BYOK.
+  * `Navigation.tsx` & `ZapLogo.tsx`: Header navigasi responsif, tombol peralihan Mode Proyektor, dan identitas brand.
+* **Struktur Aset (`assets/` & `frontend/public/`):**
+  * `assets/zappy-mascot/`: Maskot 3D resmi "ZAPPY" (model glTF 2.0 prosedural PBR: `out/zapy_*.glb` dan ekspresi wajah `out/zapy_head_*.glb`).
+  * `frontend/public/`: Ikonografi SVG, font matematika KaTeX, dan manifest PWA.
+
+### B. Backend Documentation (API Endpoints, Database Schema & .env.example)
+
+* **API Endpoints Utama (FastAPI - Port 8000 & 8001):**
+
+| Method | Endpoint | Fungsi, Validasi & Guardrail |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/diagnose` | Evaluasi aljabar simbolik via SymPy CAS: mendeteksi kesalahan transposisi, ekspansi kuadrat, akar hilang, serta menyaring keluaran via Zero-Answer Guardrail. |
+| `GET` | `/health` | Pemeriksaan ketersediaan layanan (*health check*) microservice backend. |
+| `GET` | `/api/v1/stats` | Statistik anonim agregat diagnostik dan efisiensi CFL. |
+| `POST` | `/api/v1/learn` | Perekaman memori episodik agen Sokratik dengan isolasi pengguna per-sesi. |
+| `POST` | `/api/v1/auth/google` | Verifikasi server-side token Google OAuth2 SSO dan penerbitan sesi JWT. |
+| `POST` | `/api/v1/vault/encrypt` | Enkripsi brankas kunci API pengguna (BYOK) menggunakan AES-256-GCM. |
+| `POST` | `/api/v1/vault/decrypt` | Dekripsi aman kunci API pengguna dalam sandbox server saat request AI. |
+
+* **Database & Storage Schema:**
+  * **SQLite Database (`zap_platform.db`):**
+    * Tabel `users`: `id (TEXT PRIMARY KEY)`, `email (TEXT UNIQUE)`, `name (TEXT)`, `role (TEXT)`, `created_at (TIMESTAMP)`, `last_login (TIMESTAMP)`.
+    * Tabel `user_secrets`: `user_id (TEXT)`, `provider (TEXT)`, `encrypted_payload (TEXT)`, `iv (TEXT)`, `tag (TEXT)`, `updated_at (TIMESTAMP)`.
+    * Tabel `sessions`: `token (TEXT PRIMARY KEY)`, `user_id (TEXT)`, `expires_at (TIMESTAMP)`.
+  * **Knowledge & Geometry Schemas:**
+    * `data/zap_geometry_database.json`: Katalog relasional bangun ruang parametrik (kubus, balok, prisma, limas, silinder, kerucut, bola) lengkap dengan formula volume $V$ dan luas permukaan $L_p$.
+    * `data/zap_agent_memory.jsonl`: Basis data log pembelajaran percakapan terisolasi per-pengguna.
+* **Konfigurasi Environment:** Seluruh parameter lingkungan terdokumentasi lengkap pada template [`.env.example`](.env.example) (lihat [Bagian 8](#-8-daftar-variabel-lingkungan-envexample)).
+
 ---
 
 ## 🧪 6. Hasil Uji Otomatis (Pytest 126/126 Verified)
@@ -179,7 +216,7 @@ python -m pytest -v -p no:cacheprovider tests/ tests_platform/
 
 ---
 
-## 💻 7. Panduan Instalasi & Menjalankan di Localhost
+## 💻 7. Petunjuk Localhost (Instalasi & Menjalankan di Laptop Finalis)
 
 ### Kebutuhan Lingkungan:
 * **Python:** Versi **3.10** s/d **3.15** (Direkomendasikan Python 3.15 x86-64).
