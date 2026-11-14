@@ -4,7 +4,13 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { GoogleLogo } from "@/components/CompanyLogos";
 import UserAvatar, { cleanAvatarUrl } from "@/components/UserAvatar";
-import { syncAccountBackup, restoreAccountData, clearLocalWorkingSession, saveGoogleIdToken } from "@/utils/account-sync";
+import {
+  syncAccountBackup,
+  restoreAccountData,
+  clearLocalWorkingSession,
+  saveGoogleIdToken,
+  exchangeGoogleSessionToken,
+} from "@/utils/account-sync";
 import { markSessionCookie } from "@/lib/session-cookie";
 import {
   LogOut,
@@ -146,12 +152,16 @@ export default function GoogleAuthButton({
               .catch(() => {});
           }
 
-          // Pulihkan data sesi & konfigurasi akun dari cloud
-          restoreAccountData(realGoogleUser).finally(() => {
-            if (window.location.pathname.includes("/login")) {
-              window.location.href = "/chat";
-            }
-          });
+          // Tukar Google ID token (1 jam) ke token sesi ZAP 30 hari lalu pulihkan data akun
+          exchangeGoogleSessionToken(response.credential)
+            .catch(() => null)
+            .finally(() => {
+              restoreAccountData(realGoogleUser).finally(() => {
+                if (window.location.pathname.includes("/login")) {
+                  window.location.href = "/chat";
+                }
+              });
+            });
         }
         onUserChange?.(realGoogleUser);
       }

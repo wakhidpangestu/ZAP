@@ -9,6 +9,16 @@
 
 import { type ZAPUser } from "@/components/GoogleAuthButton";
 import { type StoredConversation, getUserStorageKey } from "@/utils/chat-memory";
+
+export function isGuestAccount(user: ZAPUser | null | undefined): boolean {
+  if (!user) return false;
+  if (user.isGuest === true) return true;
+  if (user.provider === "google" || user.email?.toLowerCase().includes("@gmail")) return false;
+  return (
+    user.provider === "zap" &&
+    Boolean(user.email?.toLowerCase().includes("@student.zap") || user.name?.toLowerCase().includes("tamu"))
+  );
+}
 import {
   getProviderKey,
   getProviderSetting,
@@ -150,12 +160,73 @@ export function clearAccountSessionToken(): void {
   } catch {}
 }
 
+function decodeBase64UrlPayload(segment: string): Record<string, unknown> | null {
+  try {
+    const normalized = segment.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+    const json = atob(padded);
+    const parsed = JSON.parse(json);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isJwtExpired(token: string, skewSeconds: number = 30): boolean {
+  const parts = token.split(".");
+  if (parts.length !== 3) return false;
+  const payload = decodeBase64UrlPayload(parts[1]);
+  if (!payload || typeof payload.exp !== "number") return false;
+  return payload.exp * 1000 <= Date.now() + skewSeconds * 1000;
+}
+
+export function isAccountSessionExpired(token: string, skewSeconds: number = 30): boolean {
+  const parts = token.split(".");
+  if (parts.length !== 2) return false;
+  const payload = decodeBase64UrlPayload(parts[0]);
+  if (!payload || typeof payload.x !== "number") return false;
+  return payload.x * 1000 <= Date.now() + skewSeconds * 1000;
+}
+
 /**
  * Token untuk header Authorization sinkronisasi:
- * utamakan Google ID token (bila login Google), lalu token sesi akun ZAP.
+ * cek masa berlaku Google ID token (~1 jam); bila sudah kedaluwarsa, otomatis
+ * gunakan token sesi akun ZAP 30 hari (`ACCOUNT_SESSION_STORAGE_KEY`).
  */
 export function getSyncAuthToken(): string | null {
-  return getGoogleIdToken() || getAccountSessionToken();
+  const sessionToken = getAccountSessionToken();
+  const validSession =
+    sessionToken && !isAccountSessionExpired(sessionToken) ? sessionToken : null;
+
+  const googleToken = getGoogleIdToken();
+  if (googleToken) {
+    if (!isJwtExpired(googleToken)) {
+      return validSession || googleToken;
+    }
+    clearGoogleIdToken();
+  }
+
+  return validSession;
+}
+
+export async function exchangeGoogleSessionToken(credential: string): Promise<string | null> {
+  if (!credential) return null;
+  try {
+    const res = await fetch("/api/auth/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (typeof data?.sessionToken === "string" && data.sessionToken) {
+      saveAccountSessionToken(data.sessionToken);
+      return data.sessionToken;
+    }
+  } catch {
+    // Non-fatal: sinkronisasi tetap dapat memakai Google ID token selagi belum kedaluwarsa.
+  }
+  return null;
 }
 
 /**
@@ -171,6 +242,7 @@ export function clearLocalWorkingSession(): void {
     localStorage.removeItem(STORAGE_KEY_LEGACY);
     localStorage.removeItem("zap_active_conversation_id");
     localStorage.removeItem("zap_last_active_user_email");
+    localStorage.removeItem("zap_share_secrets_v1");
   } catch {}
 }
 

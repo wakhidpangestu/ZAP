@@ -14,6 +14,53 @@ import {
 import { type ZAPUser } from "@/components/GoogleAuthButton";
 import { getSyncAuthToken } from "@/utils/account-sync";
 
+interface SavedShareRecord {
+  shareId: string;
+  ownerSecret: string;
+  isPublic: boolean;
+  updatedAt: number;
+}
+
+const SHARE_SECRETS_STORAGE_KEY = "zap_share_secrets_v1";
+const MAX_STORED_SHARE_RECORDS = 100;
+
+function readShareSecretsMap(): Record<string, SavedShareRecord> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(SHARE_SECRETS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function loadSavedShareRecord(convId?: string): SavedShareRecord | null {
+  if (!convId) return null;
+  const map = readShareSecretsMap();
+  const rec = map[convId];
+  if (!rec || typeof rec.shareId !== "string" || typeof rec.ownerSecret !== "string") {
+    return null;
+  }
+  return rec;
+}
+
+function persistSavedShareRecord(convId: string, record: SavedShareRecord): void {
+  if (typeof window === "undefined" || !convId) return;
+  try {
+    const map = readShareSecretsMap();
+    map[convId] = record;
+    const entries = Object.entries(map).sort(
+      (a, b) => (b[1]?.updatedAt || 0) - (a[1]?.updatedAt || 0)
+    );
+    const trimmed = Object.fromEntries(entries.slice(0, MAX_STORED_SHARE_RECORDS));
+    localStorage.setItem(SHARE_SECRETS_STORAGE_KEY, JSON.stringify(trimmed));
+  } catch {
+    // Abaikan kuota localStorage penuh
+  }
+}
+
 interface ShareModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -59,15 +106,30 @@ export default function ShareModal({
   }, [isOpen, onClose]);
 
   useEffect(() => {
-    setShareId("");
-    setOwnerSecret("");
-    setShareUrl("");
+    const saved = loadSavedShareRecord(conversation?.id);
+    if (saved) {
+      setShareId(saved.shareId);
+      setOwnerSecret(saved.ownerSecret);
+      setIsPublic(saved.isPublic !== false);
+      const origin = typeof window !== "undefined" ? window.location.origin : "";
+      setShareUrl(`${origin}/a/chat/s/${saved.shareId}`);
+    } else {
+      setShareId("");
+      setOwnerSecret("");
+      setShareUrl("");
+      setIsPublic(true);
+    }
     setError(null);
     setCopied(false);
   }, [conversation?.id]);
 
   useEffect(() => {
     if (!isOpen || !conversation) return;
+
+    const saved = loadSavedShareRecord(conversation.id);
+    const effectiveShareId = shareId || saved?.shareId || "";
+    const effectiveSecret = ownerSecret || saved?.ownerSecret || "";
+    const effectivePublic = saved ? saved.isPublic !== false : true;
 
     let isMounted = true;
     async function createShareLink() {
@@ -84,30 +146,48 @@ export default function ShareModal({
             ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
           },
           body: JSON.stringify({
-            ...(shareId && (ownerSecret || currentUser?.email) ? { shareId } : {}),
-            ...(ownerSecret ? { ownerSecret } : {}),
+            ...(effectiveShareId && (effectiveSecret || currentUser?.email)
+              ? { shareId: effectiveShareId }
+              : {}),
+            ...(effectiveSecret ? { ownerSecret: effectiveSecret } : {}),
             conversationId: conversation?.id,
             title: conversation?.title || "Percakapan ChatZAP",
             messages: conversation?.messages || [],
             authorName: currentUser?.name || "Pengguna ChatZAP",
             authorEmail: currentUser?.email,
             includeAuthor,
-            isPublic: true,
+            isPublic: effectivePublic,
             targetVar: conversation?.targetVar || "x",
             active3DModel,
           }),
         });
 
         const json = await res.json();
-        if (res.ok && json.success && json.sharePath) {
+        if (res.ok && json.success && (json.sharePath || effectiveShareId)) {
+          const resolvedId = json.shareId || effectiveShareId;
+          const nextSecret =
+            typeof json.ownerSecret === "string" && json.ownerSecret
+              ? json.ownerSecret
+              : effectiveSecret;
+          const nextPublic = typeof json.isPublic === "boolean" ? json.isPublic : effectivePublic;
           const origin = typeof window !== "undefined" ? window.location.origin : "";
+          if (conversation?.id && resolvedId && nextSecret) {
+            persistSavedShareRecord(conversation.id, {
+              shareId: resolvedId,
+              ownerSecret: nextSecret,
+              isPublic: nextPublic,
+              updatedAt: Date.now(),
+            });
+          }
           if (isMounted) {
-            setShareId(json.shareId);
-            if (typeof json.ownerSecret === "string" && json.ownerSecret) {
-              setOwnerSecret(json.ownerSecret);
+            setShareId(resolvedId);
+            if (nextSecret) {
+              setOwnerSecret(nextSecret);
             }
-            setShareUrl(`${origin}${json.sharePath}`);
-            setIsPublic(true);
+            if (json.sharePath || resolvedId) {
+              setShareUrl(`${origin}${json.sharePath || `/a/chat/s/${resolvedId}`}`);
+            }
+            setIsPublic(nextPublic);
           }
         } else {
           throw new Error(json.error || "Gagal membuat tautan percakapan");
@@ -136,6 +216,9 @@ export default function ShareModal({
   const handleTogglePublic = async (nextState: boolean) => {
     setIsGenerating(true);
     setError(null);
+    const saved = loadSavedShareRecord(conversation.id);
+    const effectiveShareId = shareId || saved?.shareId || "";
+    const effectiveSecret = ownerSecret || saved?.ownerSecret || "";
     try {
       const authToken = getSyncAuthToken();
       const res = await fetch("/api/chat/share", {
@@ -145,8 +228,8 @@ export default function ShareModal({
           ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
         body: JSON.stringify({
-          shareId,
-          ...(ownerSecret ? { ownerSecret } : {}),
+          shareId: effectiveShareId,
+          ...(effectiveSecret ? { ownerSecret: effectiveSecret } : {}),
           conversationId: conversation.id,
           title: conversation.title,
           messages: conversation.messages,
@@ -161,6 +244,14 @@ export default function ShareModal({
       const json = await res.json();
       if (json.success) {
         setIsPublic(nextState);
+        if (effectiveShareId && effectiveSecret) {
+          persistSavedShareRecord(conversation.id, {
+            shareId: effectiveShareId,
+            ownerSecret: effectiveSecret,
+            isPublic: nextState,
+            updatedAt: Date.now(),
+          });
+        }
       } else {
         throw new Error(json.error || "Gagal memperbarui status tautan.");
       }
