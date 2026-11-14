@@ -57,7 +57,7 @@ const nextConfig = {
           },
           {
             key: "Content-Security-Policy",
-            value: `default-src 'self'; ${scriptSrc}; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: blob: https:; ${connectSrc}; font-src 'self' data: https://fonts.gstatic.com; frame-src https://accounts.google.com`,
+            value: `default-src 'self'; ${scriptSrc}; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: blob: https:; ${connectSrc}; font-src 'self' data: https://fonts.gstatic.com; frame-src 'self' data: blob: https://accounts.google.com; object-src 'self' data: blob:`,
           },
           {
             key: "Strict-Transport-Security",

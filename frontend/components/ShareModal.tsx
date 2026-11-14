@@ -13,6 +13,11 @@ import {
 } from "lucide-react";
 import { type ZAPUser } from "@/components/GoogleAuthButton";
 import { getSyncAuthToken } from "@/utils/account-sync";
+import {
+  compactMessagesForUpload,
+  MAX_CHAT_PAYLOAD_BYTES,
+  parseJsonResponseSafe,
+} from "@/utils/upload-compress";
 
 interface SavedShareRecord {
   shareId: string;
@@ -132,6 +137,17 @@ export default function ShareModal({
     const effectivePublic = saved ? saved.isPublic !== false : true;
 
     let isMounted = true;
+    const buildSafeShareMessages = () => {
+      let msgs = compactMessagesForUpload(conversation?.messages || [], {
+        maxMediaChars: 48_000,
+        maxTextChars: 8_000,
+      });
+      if (new TextEncoder().encode(JSON.stringify(msgs)).byteLength > MAX_CHAT_PAYLOAD_BYTES - 60_000) {
+        msgs = compactMessagesForUpload(msgs, { maxMediaChars: 0, maxTextChars: 2_500 });
+      }
+      return msgs;
+    };
+
     async function createShareLink() {
       setIsGenerating(true);
       setError(null);
@@ -152,7 +168,7 @@ export default function ShareModal({
             ...(effectiveSecret ? { ownerSecret: effectiveSecret } : {}),
             conversationId: conversation?.id,
             title: conversation?.title || "Percakapan ChatZAP",
-            messages: conversation?.messages || [],
+            messages: buildSafeShareMessages(),
             authorName: currentUser?.name || "Pengguna ChatZAP",
             authorEmail: currentUser?.email,
             includeAuthor,
@@ -162,9 +178,9 @@ export default function ShareModal({
           }),
         });
 
-        const json = await res.json();
+        const json = await parseJsonResponseSafe(res);
         if (res.ok && json.success && (json.sharePath || effectiveShareId)) {
-          const resolvedId = json.shareId || effectiveShareId;
+          const resolvedId = String(json.shareId || effectiveShareId);
           const nextSecret =
             typeof json.ownerSecret === "string" && json.ownerSecret
               ? json.ownerSecret
@@ -185,12 +201,14 @@ export default function ShareModal({
               setOwnerSecret(nextSecret);
             }
             if (json.sharePath || resolvedId) {
-              setShareUrl(`${origin}${json.sharePath || `/a/chat/s/${resolvedId}`}`);
+              setShareUrl(`${origin}${typeof json.sharePath === "string" ? json.sharePath : `/a/chat/s/${resolvedId}`}`);
             }
             setIsPublic(nextPublic);
           }
         } else {
-          throw new Error(json.error || "Gagal membuat tautan percakapan");
+          throw new Error(
+            typeof json.error === "string" ? json.error : "Gagal membuat tautan percakapan"
+          );
         }
       } catch (err: unknown) {
         if (isMounted) {
@@ -221,6 +239,13 @@ export default function ShareModal({
     const effectiveSecret = ownerSecret || saved?.ownerSecret || "";
     try {
       const authToken = getSyncAuthToken();
+      let safeMessages = compactMessagesForUpload(conversation.messages, {
+        maxMediaChars: 48_000,
+        maxTextChars: 8_000,
+      });
+      if (new TextEncoder().encode(JSON.stringify(safeMessages)).byteLength > MAX_CHAT_PAYLOAD_BYTES - 60_000) {
+        safeMessages = compactMessagesForUpload(safeMessages, { maxMediaChars: 0, maxTextChars: 2_500 });
+      }
       const res = await fetch("/api/chat/share", {
         method: "POST",
         headers: {
@@ -232,7 +257,7 @@ export default function ShareModal({
           ...(effectiveSecret ? { ownerSecret: effectiveSecret } : {}),
           conversationId: conversation.id,
           title: conversation.title,
-          messages: conversation.messages,
+          messages: safeMessages,
           authorName: currentUser?.name || "Pengguna ChatZAP",
           authorEmail: currentUser?.email,
           includeAuthor,
@@ -241,8 +266,8 @@ export default function ShareModal({
           active3DModel,
         }),
       });
-      const json = await res.json();
-      if (json.success) {
+      const json = await parseJsonResponseSafe(res);
+      if (res.ok && json.success) {
         setIsPublic(nextState);
         if (effectiveShareId && effectiveSecret) {
           persistSavedShareRecord(conversation.id, {
@@ -253,7 +278,9 @@ export default function ShareModal({
           });
         }
       } else {
-        throw new Error(json.error || "Gagal memperbarui status tautan.");
+        throw new Error(
+          typeof json.error === "string" ? json.error : "Gagal memperbarui status tautan."
+        );
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Gagal mengubah status tautan.";

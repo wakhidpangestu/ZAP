@@ -9,6 +9,7 @@
 
 import { type ZAPUser } from "@/components/GoogleAuthButton";
 import { type StoredConversation, getUserStorageKey } from "@/utils/chat-memory";
+import { compactMessagesForUpload } from "@/utils/upload-compress";
 
 export function isGuestAccount(user: ZAPUser | null | undefined): boolean {
   if (!user) return false;
@@ -484,9 +485,36 @@ export async function syncAccountBackup(
   }
 
   try {
+    // Jaga agar payload terenkripsi <= ~720 KB (aman di bawah limit Nginx 1 MB)
+    const compactConvs = taggedConvs.map((c: any) => ({
+      ...c,
+      messages: Array.isArray(c.messages)
+        ? compactMessagesForUpload(c.messages, { maxMediaChars: 12_000, maxTextChars: 6_000 })
+        : c.messages,
+    }));
+    const compactWorkspaceFiles = Array.isArray(publicPayload.workspaceFiles)
+      ? publicPayload.workspaceFiles.map((wf: any) =>
+          wf && typeof wf === "object"
+            ? {
+                id: wf.id,
+                name: wf.name,
+                size: wf.size,
+                type: wf.type,
+                uploadedAt: wf.uploadedAt,
+                workspaceId: wf.workspaceId,
+                ...(typeof wf.content === "string" && !wf.content.startsWith("data:")
+                  ? { content: wf.content.slice(0, 6_000) }
+                  : {}),
+              }
+            : wf
+        )
+      : publicPayload.workspaceFiles;
+
     const envelope: VaultEnvelope = await encryptVaultPayloadWithKey(
       {
         ...publicPayload,
+        conversations: compactConvs,
+        workspaceFiles: compactWorkspaceFiles,
         providerKeys: secretProviderKeys,
       },
       vaultKey,

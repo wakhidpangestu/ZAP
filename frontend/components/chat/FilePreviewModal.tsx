@@ -45,6 +45,15 @@ export default function FilePreviewModal({
     previewFile.content?.startsWith("data:video/") ||
     /\.(mp4|webm|mov|mkv|ogg)$/i.test(previewFile.name);
   const mediaSource = previewFile.dataUrl || previewFile.content || "";
+  const hasBinaryPdfUrl =
+    isPdf &&
+    (mediaSource.startsWith("data:application/pdf") || mediaSource.startsWith("blob:"));
+  const extractedTextContent =
+    previewFile.content &&
+    !previewFile.content.startsWith("data:") &&
+    !previewFile.content.startsWith("blob:")
+      ? previewFile.content
+      : "";
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
@@ -66,11 +75,11 @@ export default function FilePreviewModal({
             </span>
           </div>
           <div className="flex items-center gap-2">
-            {previewFile.content && !previewFile.content.startsWith("data:") && (
+            {extractedTextContent && (
               <button
                 type="button"
                 onClick={() => {
-                  onSendToChat(previewFile.content!);
+                  onSendToChat(extractedTextContent);
                   onClose();
                 }}
                 className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-white dark:text-zinc-900 dark:hover:bg-[#ece6db] text-xs font-medium transition flex items-center gap-1 cursor-pointer"
@@ -82,7 +91,7 @@ export default function FilePreviewModal({
             <button
               type="button"
               onClick={() => {
-                if (mediaSource.startsWith("data:")) {
+                if (mediaSource.startsWith("data:") || mediaSource.startsWith("blob:")) {
                   const a = document.createElement("a");
                   a.href = mediaSource;
                   a.download = previewFile.name;
@@ -140,7 +149,7 @@ export default function FilePreviewModal({
                 className="max-h-[72vh] max-w-full rounded-2xl object-contain shadow-md border border-black/5 dark:border-white/10"
               />
             </div>
-          ) : isPdf && mediaSource ? (
+          ) : hasBinaryPdfUrl ? (
             <div className="w-full h-[72vh] rounded-2xl overflow-hidden border border-black/5 dark:border-white/10 bg-white">
               <iframe
                 src={mediaSource}
@@ -157,10 +166,10 @@ export default function FilePreviewModal({
                 className="max-h-[72vh] max-w-full rounded-2xl shadow-md border border-black/5 dark:border-white/10"
               />
             </div>
-          ) : previewFile.content && !previewFile.content.startsWith("data:") ? (
+          ) : extractedTextContent ? (
             <div className="w-full h-full text-left font-mono text-xs">
               <pre className="whitespace-pre-wrap p-4 rounded-2xl bg-white dark:bg-[#121318] border border-zinc-200 dark:border-white/[0.08] overflow-x-auto selection:bg-amber-500/20">
-                {previewFile.content}
+                {extractedTextContent}
               </pre>
             </div>
           ) : (

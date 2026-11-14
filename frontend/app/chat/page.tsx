@@ -89,6 +89,12 @@ import {
 import { markSessionCookie } from "@/lib/session-cookie";
 import { resolveGeometricIntent, looksLikeGeometryRequest } from "@/data/geometry-database";
 import {
+  compressImageDataUrl,
+  extractOfficeDocumentText,
+  fitChatPayloadToBudget,
+  preparePdfForChat,
+} from "@/utils/upload-compress";
+import {
   Plus,
   PlusCircle,
   ArrowUp,
@@ -2968,46 +2974,48 @@ export default function ZAPApp() {
         }
 
         const syncAuthToken = getSyncAuthToken();
+        const requestPayload = fitChatPayloadToBudget({
+          message: userQuestion,
+          attachedFiles: currentAttached.map((f) => ({
+            name: f.name,
+            type: f.type,
+            content: f.content || f.dataUrl,
+          })),
+          ...(recentImages.length > 0 ? { recentImages } : {}),
+          workspaceMode,
+          interactionMode,
+          reasoningEffort,
+          autoLatexEnabled,
+          conversationHistory,
+          activeProblem: activeProblemContext,
+          modelId: selectedModel.id,
+          apiKey: savedGeminiKey,
+          mistralApiKey: savedMistralKey,
+          bazaarlinkApiKey: savedBazaarlinkKey,
+          claudeApiKey: savedClaudeKey,
+          openaiApiKey: savedOpenaiKey,
+          nvidiaApiKey: savedNvidiaApiKey,
+          customBaseUrl: savedCustomBaseUrl,
+          customModelName: savedCustomModelName,
+          customApiKey: savedCustomApiKey,
+          userName: currentUser?.name || "Pengguna ChatZAP",
+          jailbreakStrikes: jailbreakStrikes,
+          isSuspended: isAccountSuspended,
+          userEmail: currentUser?.email || "anonymous",
+          // Guardrail Zero-Answer: bentuk "x = 4" di tengah kalimat hanya
+          // bisa disensor bila server tahu variabel target sesi ini.
+          targetVariable: targetVar.trim() || "x",
+          // Streaming token: balasan tampil bertahap, bukan menunggu JSON utuh.
+          stream: true,
+        });
+
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             ...(syncAuthToken ? { Authorization: `Bearer ${syncAuthToken}` } : {}),
           },
-          body: JSON.stringify({
-            message: userQuestion,
-            attachedFiles: currentAttached.map((f) => ({
-              name: f.name,
-              type: f.type,
-              content: f.content || f.dataUrl,
-            })),
-            ...(recentImages.length > 0 ? { recentImages } : {}),
-            workspaceMode,
-            interactionMode,
-            reasoningEffort,
-            autoLatexEnabled,
-            conversationHistory,
-            activeProblem: activeProblemContext,
-            modelId: selectedModel.id,
-            apiKey: savedGeminiKey,
-            mistralApiKey: savedMistralKey,
-            bazaarlinkApiKey: savedBazaarlinkKey,
-            claudeApiKey: savedClaudeKey,
-            openaiApiKey: savedOpenaiKey,
-            nvidiaApiKey: savedNvidiaApiKey,
-            customBaseUrl: savedCustomBaseUrl,
-            customModelName: savedCustomModelName,
-            customApiKey: savedCustomApiKey,
-            userName: currentUser?.name || "Pengguna ChatZAP",
-            jailbreakStrikes: jailbreakStrikes,
-            isSuspended: isAccountSuspended,
-            userEmail: currentUser?.email || "anonymous",
-            // Guardrail Zero-Answer: bentuk "x = 4" di tengah kalimat hanya
-            // bisa disensor bila server tahu variabel target sesi ini.
-            targetVariable: targetVar.trim() || "x",
-            // Streaming token: balasan tampil bertahap, bukan menunggu JSON utuh.
-            stream: true,
-          }),
+          body: JSON.stringify(requestPayload),
           signal: AbortSignal.timeout(90000),
         });
 
@@ -3126,13 +3134,15 @@ export default function ZAPApp() {
       } catch (err) {
         console.error("Chat error:", err);
         const errMsg = err instanceof Error ? err.message : String(err);
+        const isPayloadTooLarge = /\b413\b/.test(errMsg);
         const assistantMsg: Message = {
           id: "msg_" + (Date.now() + 1),
           sender: "assistant",
-          replyText:
-            "⚠️ Maaf, respons asisten belum dapat dimuat karena terjadi gangguan koneksi server (" +
-            errMsg +
-            "). Silakan klik tombol coba lagi di bawah atau kirim ulang pesanmu.",
+          replyText: isPayloadTooLarge
+            ? "⚠️ Ukuran berkas lampiran atau riwayat obrolan melebihi batas unggahan proxy server (HTTP 413). Bila file berupa PDF hasil scan/gambar besar, unggah tangkapan layar per halaman soal atau kurangi jumlah lampiran dalam 1 pesan."
+            : "⚠️ Maaf, respons asisten belum dapat dimuat karena terjadi gangguan koneksi server (" +
+              errMsg +
+              "). Silakan klik tombol coba lagi di bawah atau kirim ulang pesanmu.",
           modelName: "ChatZAP Recovery",
           timestamp: zapClockNow(),
           smartboardItem: detectedGeometry,
@@ -3529,67 +3539,43 @@ export default function ZAPApp() {
     setTimeout(() => textareaRef.current?.focus(), 50);
   };
 
-  // Normalisasi gambar di sisi klien (konversi HEIC/HEIF/AVIF/GIF/BMP/SVG/WebP &
-  // kompresi foto kamera besar) ke JPEG agar diterima semua model Vision (NVIDIA NIM, Gemini, OpenAI, Claude).
+  // Normalisasi gambar di sisi klien dengan kompresi iteratif (<= 280 KB biner)
+  // agar tetap lolos batas proxy server dan diterima semua model Vision.
   const normalizeImageForUpload = useCallback(
-    async (file: File, rawDataUrl: string): Promise<{ dataUrl: string; type: string; size: number }> => {
-      const mime = (file.type || "").toLowerCase();
-      const isStandardSmall =
-        (mime === "image/jpeg" || mime === "image/png") &&
-        file.size > 0 &&
-        file.size <= 450 * 1024;
-      if (typeof document === "undefined") {
-        return { dataUrl: rawDataUrl, type: file.type || "image/png", size: file.size };
-      }
-
-      return new Promise((resolve) => {
-        const img = new Image();
-        img.onload = () => {
-          const maxDim = 1600;
-          const w = img.naturalWidth || img.width;
-          const h = img.naturalHeight || img.height;
-          if (!w || !h) {
-            resolve({ dataUrl: rawDataUrl, type: file.type || "image/png", size: file.size });
-            return;
-          }
-          if (isStandardSmall && w <= maxDim && h <= maxDim) {
-            resolve({ dataUrl: rawDataUrl, type: mime, size: file.size });
-            return;
-          }
-          const scale = Math.min(1, maxDim / Math.max(w, h));
-          const targetW = Math.max(1, Math.round(w * scale));
-          const targetH = Math.max(1, Math.round(h * scale));
-          try {
-            const canvas = document.createElement("canvas");
-            canvas.width = targetW;
-            canvas.height = targetH;
-            const ctx = canvas.getContext("2d");
-            if (!ctx) {
-              resolve({ dataUrl: rawDataUrl, type: file.type || "image/png", size: file.size });
-              return;
-            }
-            ctx.fillStyle = "#ffffff";
-            ctx.fillRect(0, 0, targetW, targetH);
-            ctx.drawImage(img, 0, 0, targetW, targetH);
-            const jpegDataUrl = canvas.toDataURL("image/jpeg", 0.86);
-            if (jpegDataUrl.startsWith("data:image/jpeg")) {
-              const approxBytes = Math.round((jpegDataUrl.length * 3) / 4);
-              resolve({ dataUrl: jpegDataUrl, type: "image/jpeg", size: approxBytes });
-              return;
-            }
-          } catch {
-            // Fallback ke dataUrl asli bila canvas gagal
-          }
-          resolve({ dataUrl: rawDataUrl, type: file.type || "image/png", size: file.size });
-        };
-        img.onerror = () => {
-          resolve({ dataUrl: rawDataUrl, type: file.type || "image/png", size: file.size });
-        };
-        img.src = rawDataUrl;
-      });
-    },
+    async (file: File, rawDataUrl: string): Promise<{ dataUrl: string; type: string; size: number }> =>
+      compressImageDataUrl(file, rawDataUrl),
     []
   );
+
+  const commitUploadedFile = useCallback((newFile: UploadedFile) => {
+    setAttachedFiles((prev) => {
+      const isDuplicate = prev.some(
+        (f) =>
+          f.size === newFile.size &&
+          (f.name === newFile.name || Math.abs(f.uploadedAt - newFile.uploadedAt) < 1500)
+      );
+      if (isDuplicate) return prev;
+      return [...prev, newFile];
+    });
+    setWorkspaceFiles((prev) => {
+      const next = [newFile, ...prev];
+      try {
+        localStorage.setItem("zap_workspace_files", JSON.stringify(next));
+      } catch {
+        try {
+          const compact = next.map((item) => ({
+            ...item,
+            dataUrl: item.dataUrl && item.dataUrl.length > 8192 ? undefined : item.dataUrl,
+            content: item.content && item.content.length > 8192 ? undefined : item.content,
+          }));
+          localStorage.setItem("zap_workspace_files", JSON.stringify(compact));
+        } catch (err) {
+          console.warn(err);
+        }
+      }
+      return next;
+    });
+  }, []);
 
   const processFileList = useCallback((files: FileList | File[]) => {
     Array.from(files).forEach((file) => {
@@ -3600,122 +3586,95 @@ export default function ZAPApp() {
         file.type.startsWith("image/") ||
         /\.(png|jpe?g|webp|gif|bmp|svg|heic|heif|avif|tiff?)$/i.test(file.name);
       const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+      const isOffice = /\.(pptx|docx|xlsx)$/i.test(file.name);
 
-      const reader = new FileReader();
       if (isText) {
+        const reader = new FileReader();
         reader.onload = (ev) => {
-          const content = ev.target?.result as string;
-          const newFile: UploadedFile = {
+          const rawText = String(ev.target?.result || "");
+          commitUploadedFile({
             id: "file_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5),
             name: file.name || `file_${Date.now()}.txt`,
             size: file.size,
             type: file.type || "text/plain",
-            content: content,
+            content: rawText.slice(0, 45_000),
             uploadedAt: Date.now(),
             workspaceId: activeWorkspaceId,
-          };
-          setAttachedFiles((prev) => {
-            const isDuplicate = prev.some(
-              (f) =>
-                f.size === newFile.size &&
-                (f.name === newFile.name || Math.abs(f.uploadedAt - newFile.uploadedAt) < 1500)
-            );
-            if (isDuplicate) return prev;
-            return [...prev, newFile];
-          });
-          setWorkspaceFiles((prev) => {
-            const next = [newFile, ...prev];
-            try {
-              localStorage.setItem("zap_workspace_files", JSON.stringify(next));
-            } catch {
-              try {
-                // Jika kuota localStorage penuh oleh gambar base64, simpan metadata berkas saja
-                const compact = next.map((item) => ({
-                  ...item,
-                  dataUrl:
-                    item.dataUrl && item.dataUrl.length > 8192 ? undefined : item.dataUrl,
-                  content:
-                    item.content && item.content.length > 8192 ? undefined : item.content,
-                }));
-                localStorage.setItem("zap_workspace_files", JSON.stringify(compact));
-              } catch (err) {
-                console.warn(err);
-              }
-            }
-            return next;
           });
         };
         reader.readAsText(file);
-      } else if (isImg || isPdf) {
+      } else if (isImg) {
+        const reader = new FileReader();
         reader.onload = async (ev) => {
           const rawDataUrl = ev.target?.result as string;
-          const normalized = isImg
-            ? await normalizeImageForUpload(file, rawDataUrl)
-            : { dataUrl: rawDataUrl, type: file.type || "application/pdf", size: file.size };
-          const newFile: UploadedFile = {
+          const normalized = await normalizeImageForUpload(file, rawDataUrl);
+          commitUploadedFile({
             id: "file_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5),
-            name: file.name || `image_${Date.now()}.${isPdf ? "pdf" : "jpg"}`,
+            name: file.name || `image_${Date.now()}.jpg`,
             size: normalized.size,
             type: normalized.type,
             dataUrl: normalized.dataUrl,
             content: normalized.dataUrl,
             uploadedAt: Date.now(),
             workspaceId: activeWorkspaceId,
-          };
-          setAttachedFiles((prev) => {
-            const isDuplicate = prev.some(
-              (f) =>
-                f.size === newFile.size &&
-                (f.name === newFile.name || Math.abs(f.uploadedAt - newFile.uploadedAt) < 1500)
-            );
-            if (isDuplicate) return prev;
-            return [...prev, newFile];
-          });
-          setWorkspaceFiles((prev) => {
-            const next = [newFile, ...prev];
-            try {
-              localStorage.setItem("zap_workspace_files", JSON.stringify(next));
-            } catch {
-              try {
-                // Jika kuota localStorage penuh oleh gambar base64, simpan metadata berkas saja
-                const compact = next.map((item) => ({
-                  ...item,
-                  dataUrl:
-                    item.dataUrl && item.dataUrl.length > 8192 ? undefined : item.dataUrl,
-                  content:
-                    item.content && item.content.length > 8192 ? undefined : item.content,
-                }));
-                localStorage.setItem("zap_workspace_files", JSON.stringify(compact));
-              } catch (err) {
-                console.warn(err);
-              }
-            }
-            return next;
           });
         };
         reader.readAsDataURL(file);
+      } else if (isPdf) {
+        const handlePdfReady = async (rawDataUrl: string) => {
+          const prepared = await preparePdfForChat(file, rawDataUrl);
+          commitUploadedFile({
+            id: "file_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5),
+            name: file.name || `dokumen_${Date.now()}.pdf`,
+            size: prepared.size,
+            type: prepared.type,
+            dataUrl: prepared.dataUrl,
+            content: prepared.content,
+            uploadedAt: Date.now(),
+            workspaceId: activeWorkspaceId,
+          });
+        };
+        if (file.size <= 3 * 1024 * 1024) {
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            void handlePdfReady((ev.target?.result as string) || "");
+          };
+          reader.readAsDataURL(file);
+        } else {
+          void handlePdfReady("");
+        }
+      } else if (isOffice) {
+        void (async () => {
+          let extracted = "";
+          try {
+            extracted = await extractOfficeDocumentText(await file.arrayBuffer(), file.name);
+          } catch (err) {
+            console.warn("Gagal membaca dokumen Office:", err);
+          }
+          commitUploadedFile({
+            id: "file_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5),
+            name: file.name || `dokumen_${Date.now()}`,
+            size: extracted ? extracted.length : file.size,
+            type: "text/plain",
+            content: extracted
+              ? `[Dokumen "${file.name}" (${Math.round(file.size / 1024)} KB) — teks terekstrak otomatis]\n${extracted}`
+              : `[Dokumen "${file.name}" (${Math.round(file.size / 1024)} KB) tidak memiliki teks yang dapat dibaca otomatis. Ekspor ke PDF teks atau kirim tangkapan layar isinya.]`,
+            uploadedAt: Date.now(),
+            workspaceId: activeWorkspaceId,
+          });
+        })();
       } else {
-        const newFile: UploadedFile = {
+        commitUploadedFile({
           id: "file_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5),
           name: file.name || `file_${Date.now()}`,
           size: file.size,
           type: file.type || "application/octet-stream",
           uploadedAt: Date.now(),
           workspaceId: activeWorkspaceId,
-        };
-        setAttachedFiles((prev) => [...prev, newFile]);
-        setWorkspaceFiles((prev) => {
-          const next = [newFile, ...prev];
-          try {
-            localStorage.setItem("zap_workspace_files", JSON.stringify(next));
-          } catch (err) {
-            console.warn(err);
-          }
-          return next;
         });
       }
     });
-  }, [activeWorkspaceId, normalizeImageForUpload]);
+  }, [activeWorkspaceId, commitUploadedFile, normalizeImageForUpload]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -4142,7 +4101,7 @@ export default function ZAPApp() {
         ref={fileInputRef}
         type="file"
         multiple
-        accept=".txt,.py,.js,.ts,.tsx,.json,.md,.csv,.pdf,.png,.jpg,.jpeg,.webp,.heic,.heif,.tex,.latex"
+        accept=".txt,.py,.js,.ts,.tsx,.json,.md,.csv,.pdf,.docx,.pptx,.xlsx,.png,.jpg,.jpeg,.webp,.heic,.heif,.tex,.latex"
         className="hidden"
         onChange={handleFileUpload}
       />
