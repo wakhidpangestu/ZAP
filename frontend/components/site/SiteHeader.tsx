@@ -119,7 +119,7 @@ function HeaderSearch({
               isDark ? "border-white/[0.07]" : "border-zinc-200/70"
             }`}
           >
-            <Search className={`h-3.5 w-3.5 shrink-0 ${isDark ? "text-zinc-500" : "text-zinc-400"}`} />
+            <Search className={`h-3.5 w-3.5 shrink-0 ${isDark ? "text-zinc-400" : "text-zinc-500"}`} />
             <input
               ref={inputRef}
               value={query}
@@ -127,12 +127,12 @@ function HeaderSearch({
               placeholder={search.placeholder ?? "Cari bagian dokumentasi…"}
               aria-label="Cari bagian dokumentasi"
               className={`w-full bg-transparent text-[12.5px] outline-none ${
-                isDark ? "text-zinc-100 placeholder:text-zinc-500" : "text-zinc-800 placeholder:text-zinc-400"
+                isDark ? "text-zinc-100 placeholder:text-zinc-400" : "text-zinc-800 placeholder:text-zinc-500"
               }`}
             />
             <kbd
               className={`shrink-0 rounded border px-1 py-0.5 font-mono text-[9px] ${
-                isDark ? "border-white/10 text-zinc-500" : "border-zinc-200 text-zinc-400"
+                isDark ? "border-white/10 text-zinc-400" : "border-zinc-300 text-zinc-600"
               }`}
             >
               esc
@@ -140,7 +140,7 @@ function HeaderSearch({
           </div>
           <ul className="max-h-72 overflow-y-auto p-1.5">
             {results.length === 0 ? (
-              <li className={`px-2.5 py-3 text-[12px] ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
+              <li className={`px-2.5 py-3 text-[12px] ${isDark ? "text-zinc-300" : "text-zinc-600"}`}>
                 Tidak ada bagian yang cocok.
               </li>
             ) : (

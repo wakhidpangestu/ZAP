@@ -178,7 +178,7 @@ export default function LandingPage() {
                 </Link>
               </div>
 
-              <div className="hero-enter hero-enter-4 mt-7 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-[10px] text-[#f6e7d7]/55">
+              <div className="hero-enter hero-enter-4 mt-7 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-[10.5px] font-medium text-[#f6e7d7]/85">
                 <span className="inline-flex items-center gap-1.5">
                   <ShieldCheck className="h-3 w-3 text-[#ffd35c]" /> Tanpa bocoran, termasuk LaTeX
                 </span>

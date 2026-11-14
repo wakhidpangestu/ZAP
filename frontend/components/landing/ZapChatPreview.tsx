@@ -101,7 +101,7 @@ function Sidebar() {
         Sesi Baru
       </button>
 
-      <div className="mb-2 flex items-center justify-between px-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-400 dark:text-zinc-500">
+      <div className="mb-2 flex items-center justify-between px-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-600 dark:text-zinc-400">
         <span>Riwayat</span>
         <span className="flex items-center gap-1">
           <Search className="h-3 w-3" />
@@ -131,7 +131,7 @@ function Sidebar() {
         </span>
         <div className="min-w-0">
           <div className="truncate text-[10.5px] font-medium text-[#09090b] dark:text-white">Zapyy</div>
-          <div className="truncate text-[9.5px] text-zinc-400 dark:text-zinc-500">Akun Tamu</div>
+          <div className="truncate text-[9.5px] text-zinc-600 dark:text-zinc-400">Akun Tamu</div>
         </div>
       </div>
     </aside>
@@ -181,7 +181,7 @@ function ChatBody() {
                 <Check className="h-2.5 w-2.5" />
                 SymPy CAS
               </span>
-              <span className="ml-auto text-[9.5px] tabular-nums text-zinc-400 dark:text-zinc-500">
+              <span className="ml-auto text-[9.5px] tabular-nums text-zinc-600 dark:text-zinc-400">
                 23.06
               </span>
             </div>
@@ -199,7 +199,7 @@ function ChatBody() {
                   <AlertCircle className="h-3.5 w-3.5 text-amber-500" />
                   <span className="text-amber-600 dark:text-amber-400">Patah Logika Terdeteksi</span>
                 </div>
-                <span className="font-mono text-[9.5px] text-zinc-400 dark:text-zinc-400">SymPy CAS</span>
+                <span className="font-mono text-[9.5px] text-zinc-600 dark:text-zinc-400">SymPy CAS</span>
               </div>
 
               <div className="space-y-1">
@@ -213,7 +213,7 @@ function ChatBody() {
                     }`}
                   >
                     <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
-                      <span className="shrink-0 text-[9.5px] text-zinc-400 dark:text-zinc-400">
+                      <span className="shrink-0 text-[9.5px] text-zinc-600 dark:text-zinc-400">
                         #{line.line_number}
                       </span>
                       <LazyMathView math={line.raw_latex} />
@@ -262,7 +262,7 @@ function ChatBody() {
                   <Box className="h-2.5 w-2.5" />
                   Lihat di Papan Tulis Virtual 3D
                 </span>
-                <span className="font-mono text-[9px] text-zinc-400 dark:text-zinc-500">Kubus</span>
+                <span className="font-mono text-[9px] text-zinc-600 dark:text-zinc-400">Kubus</span>
               </div>
             </div>
 
@@ -278,8 +278,8 @@ function ChatBody() {
       {/* Composer */}
       <div className="px-4 pb-4 sm:px-6">
         <div className="flex items-center gap-2 rounded-2xl border border-zinc-200/90 bg-white px-3 py-2.5 shadow-[0_10px_30px_-18px_rgba(9,9,11,0.35)] dark:border-white/[0.08] dark:bg-[#14161b]">
-          <Paperclip className="h-3.5 w-3.5 shrink-0 text-zinc-400 dark:text-zinc-500" />
-          <span className="min-w-0 flex-1 truncate text-[11.5px] text-zinc-400 dark:text-zinc-500">
+          <Paperclip className="h-3.5 w-3.5 shrink-0 text-zinc-500 dark:text-zinc-400" />
+          <span className="min-w-0 flex-1 truncate text-[11.5px] text-zinc-600 dark:text-zinc-400">
             Tulis soal atau langkah pengerjaanmu…
           </span>
           <span className="hidden shrink-0 items-center gap-1 rounded-full bg-[#faf4ed] px-2 py-0.5 text-[9.5px] font-medium text-[#8f5e32] dark:bg-white/[0.06] dark:text-[#d4a574] sm:inline-flex">
