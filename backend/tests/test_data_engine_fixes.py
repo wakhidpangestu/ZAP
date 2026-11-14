@@ -17,7 +17,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from main import app
-from backend.data_engine.harvester import _verify_gsm8k_solution, _verify_theorem_with_sympy
+from backend.data_engine.harvester import (
+    ENABLED_SOURCES,
+    OPEN_MATH_SOURCES,
+    _verify_gsm8k_solution,
+    _verify_theorem_with_sympy,
+)
 from backend.data_engine.agent_harness import ZAPAgentHarness
 from backend.data_engine.store import MathCorpusStore
 from backend.data_engine.generators import generate_sd_sample, generate_smp_sample
@@ -35,6 +40,15 @@ class TestHarvesterFailClosed:
         result = _verify_theorem_with_sympy("(x + y)^2 = x^2 + 2*x*y + y^2")
         assert result["is_valid"] is True
         assert result["status"] == "verified"
+
+    def test_indonesian_curriculum_formulas_verify_and_source_enabled(self):
+        assert "indo_kurikulum_sd" in ENABLED_SOURCES
+        source = OPEN_MATH_SOURCES["indo_kurikulum_sd"]
+        assert source["format"] == "wiki_rest"
+        assert source["url"].startswith("https://id.wikipedia.org/")
+        for _, _, _, formula, _ in source["pages"]:
+            res = _verify_theorem_with_sympy(formula)
+            assert res["is_valid"] is True, f"Formula {formula} failed SymPy verification"
 
     def test_gsm8k_consistent_annotations_verify(self):
         answer = "Janet sells 16 - 3 - 4 = <<16-3-4=9>>9 eggs.\n#### 9"
