@@ -542,15 +542,6 @@ export default function DocsClient() {
           </div>
         </header>
 
-        {/* Mobile TOC */}
-        <nav
-          aria-label="Daftar isi"
-          className="sticky top-[120px] z-20 -mx-4 mt-8 border-y border-zinc-200/60 bg-[#fbf7f0]/92 px-4 py-2 backdrop-blur-xl lg:hidden dark:border-white/[0.07] dark:bg-[#0b0c0f]/92"
-        >
-          <div className="overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <TocList active={active} compact />
-          </div>
-        </nav>
 
         <div className="lg:grid lg:grid-cols-[236px_minmax(0,1fr)] lg:gap-8 xl:grid-cols-[236px_minmax(0,1fr)_212px] xl:gap-10">
           {/* Desktop TOC */}
