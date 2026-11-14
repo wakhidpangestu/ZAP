@@ -536,16 +536,17 @@ function SmartboardPanel() {
     setUserTookOver(true);
   }, []);
 
-  const preview = useMemo(
-    () => ({
+  const preview = useMemo(() => {
+    // Gunakan sceneToken agar klik ulang preset yang sama tetap memicu pembaruan scene.
+    void sceneToken;
+    return {
       scene: { ...DEMO_SCENES[sceneIndex].scene },
       autoRotate: true,
       cameraZoom: 1.16,
       disableWheel: true,
       onSceneChange: handleSceneChange,
-    }),
-    [sceneIndex, sceneToken, handleSceneChange]
-  );
+    };
+  }, [sceneIndex, sceneToken, handleSceneChange]);
 
   const isBoardScene = DEMO_SCENES[sceneIndex].id === "papan";
 

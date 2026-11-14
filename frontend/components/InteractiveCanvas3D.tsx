@@ -31,12 +31,14 @@ import {
   LogOut,
   ImagePlus,
   CircleDot,
+  Bot,
 } from "lucide-react";
 import { useTheme } from "@/utils/theme";
 import MathView from "@/components/MathView";
 import { Dock, DockItem, DockIcon, DockLabel } from "@/components/ui/dock";
 import { motion, AnimatePresence } from "framer-motion";
 import ZapLogo from "@/components/ZapLogo";
+import { computeSolidMetrics, formatMetricNumber } from "@/lib/solid-metrics";
 
 export type MathModelType =
   | "empty"
@@ -389,19 +391,6 @@ function createDimensionSprite(text: string, isDark = true): THREE.Sprite {
   const sprite = new THREE.Sprite(material);
   sprite.scale.set(0.72, 0.22, 1);
   return sprite;
-}
-
-function fmt(n: number): string {
-  return n.toLocaleString("id-ID", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
-interface InfoRow {
-  label: string;
-  formula: string;
-  value?: string;
 }
 
 const SOLID_LABELS: Record<SolidKind, string> = {
@@ -801,7 +790,7 @@ export default function InteractiveCanvas3D({
     : false;
   const selectedDetected = selectedNote ? detectMathTransform(selectedNote.rawText || selectedNote.latex) : null;
 
-  // Kolaborasi realtime (papan bersama via WebSocket)
+  // Kolaborasi realtime (papan bersama via WebSocket & Simulasi Siswa Virtual)
   type CollabPeer = { id: string; name: string; color: string };
   type CollabSeg = { kind?: string; x0?: number; y0?: number; x1?: number; y1?: number; color?: string; size?: number };
   type CollabState = { model?: string; solid?: string; plane?: string; a?: number; b?: number; c?: number; unit?: string; slice?: boolean };
@@ -810,10 +799,58 @@ export default function InteractiveCanvas3D({
   const [collabPeers, setCollabPeers] = useState<{ id: string; name: string; color: string }[]>([]);
   const [myCollabId, setMyCollabId] = useState<string | null>(null);
   const [myColor, setMyColor] = useState<string>("#f59e0b");
-  const [remoteCursors, setRemoteCursors] = useState<Record<string, { x: number; y: number; name: string; color: string; ts: number }>>({});
+  const [remoteCursors, setRemoteCursors] = useState<Record<string, { x: number; y: number; name: string; color: string; ts: number; tag?: string; isClicking?: boolean }>>({});
   const [showSharePanel, setShowSharePanel] = useState(false);
   const [joinCode, setJoinCode] = useState("");
   const [shareCopied, setShareCopied] = useState(false);
+  const [isBotSimActive, setIsBotSimActive] = useState<boolean>(true);
+  const isBotSimActiveRef = useRef<boolean>(true);
+  useEffect(() => {
+    isBotSimActiveRef.current = isBotSimActive;
+  }, [isBotSimActive]);
+
+  // Template siswa bot untuk demo/rekaman suasana kelas interaktif
+  const BOT_STUDENT_TEMPLATES = useRef([
+    {
+      id: "bot_siti",
+      name: "Siti Rahma (Siswa)",
+      color: "#10b981", // Emerald
+      role: "Eksplorasi Geometri 3D",
+      preferredArea: { minX: 0.38, maxX: 0.64, minY: 0.30, maxY: 0.60 },
+      actions: [
+        "🔍 Mengamati rusuk kubus",
+        "✨ Memeriksa bidang iris",
+        "📐 Mengecek simetri 3D",
+        "👁️ Menyimak proyeksi sudut",
+      ],
+    },
+    {
+      id: "bot_budi",
+      name: "Budi Santoso (Siswa)",
+      color: "#3b82f6", // Sky Blue
+      role: "Analisis Rumus & Nilai",
+      preferredArea: { minX: 0.16, maxX: 0.38, minY: 0.18, maxY: 0.42 },
+      actions: [
+        "📝 Membaca rumus V = s³",
+        "🔢 Menghitung s = 10 cm",
+        "💡 Verifikasi luas permukaan",
+        "✏️ Mencocokkan nilai variabel",
+      ],
+    },
+    {
+      id: "bot_aidan",
+      name: "Aidan Pratama",
+      color: "#a855f7", // Purple
+      role: "Aktivitas Kanvas & Catatan",
+      preferredArea: { minX: 0.45, maxX: 0.78, minY: 0.65, maxY: 0.88 },
+      actions: [
+        "✏️ Siap menggambar",
+        "🎨 Memilih alat di dock",
+        "📋 Menyimak penjelasan guru",
+        "📌 Menandai titik fokus",
+      ],
+    },
+  ]).current;
   const wsRef = useRef<WebSocket | null>(null);
   const collabRoomRef = useRef<string | null>(null);
   const myColorRef = useRef<string>("#f59e0b");
@@ -845,7 +882,7 @@ export default function InteractiveCanvas3D({
       cancelAnimationFrame(raf);
       clearTimeout(timer);
     };
-  }, [inlineComposer?.x, inlineComposer?.y, inlineComposer?.id]);
+  }, [inlineComposer]);
 
   // Drag selection marquee (lasso / drag to select components)
   const [selectionMarquee, setSelectionMarquee] = useState<{
@@ -894,6 +931,10 @@ export default function InteractiveCanvas3D({
   // tab browser tidak terlihat, atau kanvas tidak sedang menampilkan mode 3D.
   const [isPageHidden, setIsPageHidden] = useState(false);
   const [isCanvasInView, setIsCanvasInView] = useState(true);
+
+  // Zero-Answer Mode pada panel metrik 3D: hasil perhitungan akhir disembunyikan
+  // secara bawaan agar selaras dengan kebijakan Zero-Answer Policy, dan bisa dibuka 1-klik.
+  const [revealMetricAnswers, setRevealMetricAnswers] = useState(false);
 
   // 3D State
   const [autoRotate, setAutoRotate] = useState(Boolean(preview?.autoRotate));
@@ -1217,18 +1258,41 @@ export default function InteractiveCanvas3D({
     try { sessionStorage.removeItem("zap_board_code"); } catch { /* abaikan */ }
   };
 
+  const startSimulatedCollab = (roomCode?: string) => {
+    const code = (roomCode || genBoardCode()).toUpperCase();
+    disconnectBoard();
+    collabRoomRef.current = code;
+    setCollabRoom(code);
+    const myId = "host";
+    const myC = "#f59e0b";
+    setMyCollabId(myId);
+    setMyColor(myC);
+    setIsBotSimActive(true);
+    isBotSimActiveRef.current = true;
+    setCollabPeers([
+      { id: myId, name: `${collabName || "Guru / Presenter"} (kamu)`, color: myC },
+      { id: "bot_siti", name: "Siti Rahma (Siswa)", color: "#10b981" },
+      { id: "bot_budi", name: "Budi Santoso (Siswa)", color: "#3b82f6" },
+      { id: "bot_aidan", name: "Aidan Pratama", color: "#a855f7" },
+    ]);
+    try {
+      const u = new URL(window.location.href);
+      u.hash = `board=${code}`;
+      window.history.replaceState(null, "", u.toString());
+    } catch { /* abaikan */ }
+    connectBoard(code);
+  };
+
   const connectBoard = (roomRaw: string) => {
     const room = roomRaw.trim().replace(/[^A-Za-z0-9_-]/g, "").slice(0, 24);
     if (!room) return;
-    disconnectBoard();
+    if (wsRef.current) {
+      try { wsRef.current.onclose = null; wsRef.current.close(); } catch { /* abaikan */ }
+      wsRef.current = null;
+    }
     const base = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
     const wsBase = base.replace(/^http/, "ws");
     const name = (collabName || "Tamu").slice(0, 24);
-    let ws: WebSocket;
-    try {
-      ws = new WebSocket(`${wsBase}/api/v1/board/${room}?name=${encodeURIComponent(name)}`);
-    } catch { return; }
-    wsRef.current = ws;
     collabRoomRef.current = room;
     setCollabRoom(room);
     try {
@@ -1236,12 +1300,45 @@ export default function InteractiveCanvas3D({
       u.hash = `board=${room}`;
       window.history.replaceState(null, "", u.toString());
     } catch { /* abaikan */ }
+
+    // Jika bot simulation aktif, daftarkan siswa bot ke daftar peserta
+    if (isBotSimActiveRef.current) {
+      setCollabPeers((prev) => {
+        const existingIds = new Set(prev.map((p) => p.id));
+        const toAdd = BOT_STUDENT_TEMPLATES.filter((b) => !existingIds.has(b.id)).map((b) => ({
+          id: b.id,
+          name: b.name,
+          color: b.color,
+        }));
+        if (!existingIds.has("host") && !existingIds.has("u1")) {
+          return [{ id: "host", name: `${name} (kamu)`, color: "#f59e0b" }, ...toAdd];
+        }
+        return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+      });
+    }
+
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(`${wsBase}/api/v1/board/${room}?name=${encodeURIComponent(name)}`);
+    } catch {
+      // WS gagal dibuka (backend offline), tetap berjalan dalam mode papan lokal / simulasi
+      return;
+    }
+    wsRef.current = ws;
     ws.onmessage = (ev) => {
       try { collabHandlerRef.current?.(JSON.parse(ev.data)); } catch { /* abaikan */ }
+    };
+    ws.onerror = () => {
+      // Bila backend offline, jangan hapus ruang jika simulasi aktif
+      if (isBotSimActiveRef.current) return;
     };
     ws.onclose = () => {
       if (wsRef.current === ws) {
         wsRef.current = null;
+        if (isBotSimActiveRef.current && collabRoomRef.current) {
+          // Pertahankan ruang simulasi lokal tanpa websocket
+          return;
+        }
         collabRoomRef.current = null;
         setCollabRoom(null);
         setCollabPeers([]);
@@ -1249,6 +1346,144 @@ export default function InteractiveCanvas3D({
       }
     };
   };
+
+  // Loop simulasi siswa bot aktif (bergerak natural, mengamati model 3D & membaca rumus)
+  useEffect(() => {
+    if (!collabRoom || !isBotSimActive) {
+      setRemoteCursors((prev) => {
+        const next = { ...prev };
+        BOT_STUDENT_TEMPLATES.forEach((b) => {
+          delete next[b.id];
+        });
+        return next;
+      });
+      return;
+    }
+
+    // Pastikan siswa bot ada di daftar peserta
+    setCollabPeers((prev) => {
+      const existingIds = new Set(prev.map((p) => p.id));
+      const toAdd = BOT_STUDENT_TEMPLATES.filter((b) => !existingIds.has(b.id)).map((b) => ({
+        id: b.id,
+        name: b.name,
+        color: b.color,
+      }));
+      return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+    });
+
+    interface ActiveBot {
+      id: string;
+      name: string;
+      color: string;
+      x: number;
+      y: number;
+      targetX: number;
+      targetY: number;
+      speed: number;
+      isClicking: boolean;
+      clickTicks: number;
+      state: "moving" | "hovering";
+      stateDuration: number;
+      actionTag?: string;
+      preferredArea: { minX: number; maxX: number; minY: number; maxY: number };
+      actions: string[];
+    }
+
+    const activeBots: ActiveBot[] = BOT_STUDENT_TEMPLATES.map((tpl, i) => {
+      const startX = tpl.preferredArea.minX + Math.random() * (tpl.preferredArea.maxX - tpl.preferredArea.minX);
+      const startY = tpl.preferredArea.minY + Math.random() * (tpl.preferredArea.maxY - tpl.preferredArea.minY);
+      return {
+        ...tpl,
+        x: startX,
+        y: startY,
+        targetX: startX,
+        targetY: startY,
+        speed: 0.007 + Math.random() * 0.004,
+        isClicking: false,
+        clickTicks: 0,
+        state: "hovering",
+        stateDuration: 20 + i * 15,
+        actionTag: tpl.actions[0],
+      };
+    });
+
+    let tick = 0;
+    const interval = window.setInterval(() => {
+      tick++;
+      activeBots.forEach((b, idx) => {
+        if (b.clickTicks > 0) {
+          b.clickTicks--;
+          if (b.clickTicks === 0) b.isClicking = false;
+        }
+
+        if (b.state === "moving") {
+          const dx = b.targetX - b.x;
+          const dy = b.targetY - b.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist < 0.015) {
+            b.x = b.targetX;
+            b.y = b.targetY;
+            b.state = "hovering";
+            b.stateDuration = 35 + Math.floor(Math.random() * 50); // hover 1.5 - 3.5 detik
+            b.actionTag = b.actions[Math.floor(Math.random() * b.actions.length)];
+            if (Math.random() < 0.35) {
+              b.isClicking = true;
+              b.clickTicks = 6;
+            }
+          } else {
+            const step = Math.min(dist * 0.09, b.speed);
+            const perpX = -dy / dist;
+            const perpY = dx / dist;
+            const wobble = Math.sin((tick + idx * 25) / 7) * 0.0018;
+            b.x += (dx / dist) * step + perpX * wobble;
+            b.y += (dy / dist) * step + perpY * wobble;
+          }
+        } else if (b.state === "hovering") {
+          b.stateDuration--;
+          b.x += (Math.random() - 0.5) * 0.0012;
+          b.y += (Math.random() - 0.5) * 0.0012;
+
+          if (b.stateDuration <= 0) {
+            b.state = "moving";
+            b.speed = 0.006 + Math.random() * 0.005;
+            b.actionTag = undefined;
+            if (Math.random() < 0.82) {
+              b.targetX = b.preferredArea.minX + Math.random() * (b.preferredArea.maxX - b.preferredArea.minX);
+              b.targetY = b.preferredArea.minY + Math.random() * (b.preferredArea.maxY - b.preferredArea.minY);
+            } else {
+              b.targetX = 0.22 + Math.random() * 0.56;
+              b.targetY = 0.22 + Math.random() * 0.56;
+            }
+          }
+        }
+
+        b.x = Math.max(0.06, Math.min(0.92, b.x));
+        b.y = Math.max(0.08, Math.min(0.92, b.y));
+      });
+
+      setRemoteCursors((prev) => {
+        const next = { ...prev };
+        const now = Date.now();
+        activeBots.forEach((b) => {
+          next[b.id] = {
+            x: b.x,
+            y: b.y,
+            name: b.name,
+            color: b.color,
+            ts: now,
+            tag: b.actionTag,
+            isClicking: b.isClicking,
+          };
+        });
+        return next;
+      });
+    }, 40);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [collabRoom, isBotSimActive, BOT_STUDENT_TEMPLATES]);
 
   const genBoardCode = () =>
     Array.from({ length: 6 }, () => "ABCDEFGHJKMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 31)]).join("");
@@ -1397,7 +1632,7 @@ export default function InteractiveCanvas3D({
     }
   }, [activeModel, solidKind, planeShapeKind, paramA, paramB, paramC, unit, showSlicePlane]);
 
-  // Siapkan sinkronisasi, gabung otomatis dari tautan #board=KODE, bersihkan kursor basi
+  // Siapkan sinkronisasi, gabung otomatis dari tautan #board=KODE atau demo, bersihkan kursor basi
   useEffect(() => {
     syncReadyRef.current = true;
     const m = window.location.hash.match(/board=([A-Za-z0-9_-]{3,24})/);
@@ -1405,7 +1640,12 @@ export default function InteractiveCanvas3D({
     if (!code) {
       try { code = sessionStorage.getItem("zap_board_code") || undefined; } catch { /* abaikan */ }
     }
-    if (code) connectBoard(code);
+    if (!code && typeof window !== "undefined" && window.location.search.includes("demo=collab")) {
+      code = "DEMO-2026";
+    }
+    if (code) {
+      startSimulatedCollab(code);
+    }
     const cursorTimer = window.setInterval(() => {
       setRemoteCursors((prev) => {
         const now = Date.now();
@@ -2225,7 +2465,7 @@ export default function InteractiveCanvas3D({
 
         ctx.fillStyle = isDark ? "#ffffff" : "#0f172a";
         ctx.font = "bold 11px sans-serif";
-        ctx.fillText(`Puncak (${fmt(vertexX)}, ${fmt(vertexY)})`, pvx + 8, pvy - 8);
+        ctx.fillText(`Puncak (${formatMetricNumber(vertexX)}, ${formatMetricNumber(vertexY)})`, pvx + 8, pvy - 8);
       }
     } else if (activeModel === "2d_trig") {
       ctx.strokeStyle = isDark ? "#c084fc" : "#7e22ce";
@@ -3097,7 +3337,7 @@ export default function InteractiveCanvas3D({
         ctx.fillText("Jaring-Jaring 2D Limas (Piramida)", originX, topY - petal - 24);
       }
     }
-  }, [activeModel, planeShapeKind, paramA, paramB, paramC, unit, isProjectorMode, is2DGraphModel, isDark, zoom2D, pan2D]);
+  }, [activeModel, planeShapeKind, paramA, paramB, paramC, unit, isProjectorMode, is2DGraphModel, isDark, zoom2D, pan2D, showHandles]);
 
   // =========================================================================
   // 4. THREE.JS 3D MESH GENERATOR (KUBUS SOLID, BALOK, SILINDER, KERUCUT)
@@ -3112,365 +3352,21 @@ export default function InteractiveCanvas3D({
     activeModel === "solids" ||
     activeModel === "surface";
 
-  const solidMetrics = useCallback((): { volume: number; surface: number; rows: InfoRow[] } => {
-    const A = paramA || 10;
-    const B = paramB || 6;
-    const C = paramC || 4;
-    const u = unit || "cm";
-
-    if (activeModel === "2d_shape") {
-      if (planeShapeKind === "jajar_genjang") {
-        const a = paramA !== undefined ? paramA : 12;
-        const t = paramB !== undefined ? paramB : 8;
-        const s = paramC !== undefined ? paramC : 10;
-        const luas = a * t;
-        const keliling = 2 * (a + s);
-        return {
-          volume: 0,
-          surface: luas,
-          rows: [
-            { label: "Panjang Alas (a)", formula: "a", value: `${fmt(a)} ${u}` },
-            { label: "Tinggi Tegak (t)", formula: "t", value: `${fmt(t)} ${u}` },
-            { label: "Sisi Miring (s)", formula: "s", value: `${fmt(s)} ${u}` },
-            { label: "Luas Jajar Genjang", formula: "L = a · t", value: `${fmt(luas)} ${u}²` },
-            { label: "Keliling Jajar Genjang", formula: "K = 2(a + s)", value: `${fmt(keliling)} ${u}` },
-          ],
-        };
-      } else if (planeShapeKind === "trapesium") {
-        const a = paramA !== undefined ? paramA : 8;
-        const b = paramB !== undefined ? paramB : 14;
-        const t = paramC !== undefined ? paramC : 6;
-        const luas = ((a + b) * t) / 2;
-        return {
-          volume: 0,
-          surface: luas,
-          rows: [
-            { label: "Sisi Atas (a)", formula: "a", value: `${fmt(a)} ${u}` },
-            { label: "Sisi Bawah (b)", formula: "b", value: `${fmt(b)} ${u}` },
-            { label: "Tinggi (t)", formula: "t", value: `${fmt(t)} ${u}` },
-            { label: "Luas Trapesium", formula: "L = ½(a + b)t", value: `${fmt(luas)} ${u}²` },
-          ],
-        };
-      } else if (planeShapeKind === "segitiga") {
-        const a = paramA !== undefined ? paramA : 10;
-        const t = paramB !== undefined ? paramB : 8;
-        const luas = (a * t) / 2;
-        return {
-          volume: 0,
-          surface: luas,
-          rows: [
-            { label: "Alas Segitiga (a)", formula: "a", value: `${fmt(a)} ${u}` },
-            { label: "Tinggi Segitiga (t)", formula: "t", value: `${fmt(t)} ${u}` },
-            { label: "Luas Segitiga", formula: "L = ½ a · t", value: `${fmt(luas)} ${u}²` },
-          ],
-        };
-      } else if (planeShapeKind === "persegi_panjang") {
-        const p = paramA !== undefined ? paramA : 14;
-        const l = paramB !== undefined ? paramB : 8;
-        const luas = p * l;
-        const keliling = 2 * (p + l);
-        const diagonal = Math.sqrt(p * p + l * l);
-        return {
-          volume: 0,
-          surface: luas,
-          rows: [
-            { label: "Panjang (p)", formula: "p", value: `${fmt(p)} ${u}` },
-            { label: "Lebar (l)", formula: "l", value: `${fmt(l)} ${u}` },
-            { label: "Luas Persegi Panjang", formula: "L = p · l", value: `${fmt(luas)} ${u}²` },
-            { label: "Keliling Persegi Panjang", formula: "K = 2(p + l)", value: `${fmt(keliling)} ${u}` },
-            { label: "Panjang Diagonal", formula: "d = √(p² + l²)", value: `${fmt(Number(diagonal.toFixed(2)))} ${u}` },
-          ],
-        };
-      } else if (planeShapeKind === "persegi") {
-        const s = paramA !== undefined ? paramA : 10;
-        const luas = s * s;
-        const keliling = 4 * s;
-        const diagonal = s * Math.sqrt(2);
-        return {
-          volume: 0,
-          surface: luas,
-          rows: [
-            { label: "Panjang Sisi (s)", formula: "s", value: `${fmt(s)} ${u}` },
-            { label: "Luas Persegi", formula: "L = s²", value: `${fmt(luas)} ${u}²` },
-            { label: "Keliling Persegi", formula: "K = 4s", value: `${fmt(keliling)} ${u}` },
-            { label: "Panjang Diagonal", formula: "d = s√2", value: `${fmt(Number(diagonal.toFixed(2)))} ${u}` },
-          ],
-        };
-      } else if (planeShapeKind === "segilima" || planeShapeKind === "segienam" || planeShapeKind === "poligon") {
-        const s = paramA !== undefined ? paramA : 10;
-        const n = planeShapeKind === "segilima" ? 5 : planeShapeKind === "segienam" ? 6 : (paramC || 6);
-        const luas = (n * s * s) / (4 * Math.tan(Math.PI / n));
-        const keliling = n * s;
-        const apotema = s / (2 * Math.tan(Math.PI / n));
-        return {
-          volume: 0,
-          surface: luas,
-          rows: [
-            { label: "Panjang Sisi (s)", formula: "s", value: `${fmt(s)} ${u}` },
-            { label: `Luas ${n === 5 ? "Segilima" : n === 6 ? "Segienam" : `Segi-${n}`}`, formula: "L = n·s²/(4·tan(π/n))", value: `${fmt(luas)} ${u}²` },
-            { label: "Keliling", formula: `K = ${n}s`, value: `${fmt(keliling)} ${u}` },
-            { label: "Apotema", formula: "a = s/(2·tan(π/n))", value: `${fmt(apotema)} ${u}` },
-          ],
-        };
-
-      } else if (planeShapeKind === "lingkaran") {
-        const r = paramA !== undefined ? paramA : 7;
-        const luas = Math.PI * r * r;
-        const keliling = 2 * Math.PI * r;
-        const diameter = 2 * r;
-        return {
-          volume: 0,
-          surface: luas,
-          rows: [
-            { label: "Jari-jari (r)", formula: "r", value: `${fmt(r)} ${u}` },
-            { label: "Diameter (d)", formula: "d = 2r", value: `${fmt(diameter)} ${u}` },
-            { label: "Luas Lingkaran", formula: "L = πr²", value: `${fmt(Number(luas.toFixed(2)))} ${u}²` },
-            { label: "Keliling Lingkaran", formula: "K = 2πr", value: `${fmt(Number(keliling.toFixed(2)))} ${u}` },
-          ],
-        };
-      } else if (planeShapeKind === "belah_ketupat") {
-        const d1 = paramA !== undefined ? paramA : 12;
-        const d2 = paramB !== undefined ? paramB : 16;
-        const s = Math.sqrt(Math.pow(d1 / 2, 2) + Math.pow(d2 / 2, 2));
-        const luas = (d1 * d2) / 2;
-        const keliling = 4 * s;
-        return {
-          volume: 0,
-          surface: luas,
-          rows: [
-            { label: "Diagonal 1 (d₁)", formula: "d₁", value: `${fmt(d1)} ${u}` },
-            { label: "Diagonal 2 (d₂)", formula: "d₂", value: `${fmt(d2)} ${u}` },
-            { label: "Sisi Miring (s)", formula: "s = √((d₁/2)² + (d₂/2)²)", value: `${fmt(Number(s.toFixed(2)))} ${u}` },
-            { label: "Luas Belah Ketupat", formula: "L = ½ d₁ · d₂", value: `${fmt(luas)} ${u}²` },
-            { label: "Keliling Belah Ketupat", formula: "K = 4s", value: `${fmt(Number(keliling.toFixed(2)))} ${u}` },
-          ],
-        };
-      } else if (planeShapeKind === "layang_layang") {
-        const d1 = paramA !== undefined ? paramA : 12;
-        const d2 = paramB !== undefined ? paramB : 16;
-        const luas = (d1 * d2) / 2;
-        return {
-          volume: 0,
-          surface: luas,
-          rows: [
-            { label: "Diagonal Utama (d₁)", formula: "d₁", value: `${fmt(d1)} ${u}` },
-            { label: "Diagonal Melintang (d₂)", formula: "d₂", value: `${fmt(d2)} ${u}` },
-            { label: "Luas Layang-Layang", formula: "L = ½ d₁ · d₂", value: `${fmt(luas)} ${u}²` },
-          ],
-        };
-      } else if (planeShapeKind === "jaring_prisma") {
-        const s = paramA !== undefined ? paramA : 8;
-        const t = paramB !== undefined ? paramB : 10;
-        const luasAlas = (Math.sqrt(3) / 4) * s * s;
-        const luasSelimut = 3 * s * t;
-        const totalNet = 2 * luasAlas + luasSelimut;
-        return {
-          volume: 0,
-          surface: totalNet,
-          rows: [
-            { label: "Sisi Alas Segitiga (s)", formula: "s", value: `${fmt(s)} ${u}` },
-            { label: "Tinggi Sisi Tegak (t)", formula: "t", value: `${fmt(t)} ${u}` },
-            { label: "Luas 1 Alas Segitiga", formula: "La = (√3/4)s²", value: `${fmt(Number(luasAlas.toFixed(2)))} ${u}²` },
-            { label: "Luas 3 Sisi Tegak", formula: "Ls = 3st", value: `${fmt(Number(luasSelimut.toFixed(2)))} ${u}²` },
-            { label: "Total Luas Jaring-Jaring", formula: "L = 2La + Ls", value: `${fmt(Number(totalNet.toFixed(2)))} ${u}²` },
-          ],
-        };
-      } else if (planeShapeKind === "jaring_kubus") {
-        const s = paramA !== undefined ? paramA : 10;
-        const totalNet = 6 * s * s;
-        return {
-          volume: 0,
-          surface: totalNet,
-          rows: [
-            { label: "Panjang Rusuk (s)", formula: "s", value: `${fmt(s)} ${u}` },
-            { label: "Luas 1 Bidang Persegi", formula: "L₁ = s²", value: `${fmt(s * s)} ${u}²` },
-            { label: "Total Luas Jaring-Jaring", formula: "L = 6s²", value: `${fmt(totalNet)} ${u}²` },
-          ],
-        };
-      } else if (planeShapeKind === "jaring_limas") {
-        const s = paramA !== undefined ? paramA : 8;
-        const t = paramB !== undefined ? paramB : 10;
-        const ts = Math.sqrt((s / 2) ** 2 + t ** 2);
-        const luasAlas = s * s;
-        const luas4Segitiga = 2 * s * ts;
-        const totalNet = luasAlas + luas4Segitiga;
-        return {
-          volume: 0,
-          surface: totalNet,
-          rows: [
-            { label: "Sisi Alas Persegi (s)", formula: "s", value: `${fmt(s)} ${u}` },
-            { label: "Tinggi Limas (t)", formula: "t", value: `${fmt(t)} ${u}` },
-            { label: "Tinggi Sisi Miring (ts)", formula: "ts = √((s/2)²+t²)", value: `${fmt(Number(ts.toFixed(2)))} ${u}` },
-            { label: "Luas Alas Persegi", formula: "La = s²", value: `${fmt(luasAlas)} ${u}²` },
-            { label: "Luas 4 Segitiga Selimut", formula: "Ls = 2·s·ts", value: `${fmt(Number(luas4Segitiga.toFixed(2)))} ${u}²` },
-            { label: "Total Luas Jaring-Jaring", formula: "L = La + Ls", value: `${fmt(Number(totalNet.toFixed(2)))} ${u}²` },
-          ],
-        };
-      }
-    }
-
-    if (activeModel === "cylinder") {
-      const r = paramA !== undefined ? paramA : 7;
-      const h = paramB !== undefined ? paramB : 12;
-      const v = Math.PI * r * r * h;
-      const ls = 2 * Math.PI * r * h;
-      const lp = 2 * Math.PI * r * (r + h);
-      return {
-        volume: v,
-        surface: lp,
-        rows: [
-          { label: "Jari-jari Alas (r)", formula: "r", value: `${fmt(r)} ${u}` },
-          { label: "Tinggi Silinder (t)", formula: "t", value: `${fmt(h)} ${u}` },
-          { label: "Luas Selimut", formula: "2πrt", value: `${fmt(ls)} ${u}²` },
-          { label: "Luas Permukaan", formula: "2πr(r+t)", value: `${fmt(lp)} ${u}²` },
-          { label: "Volume Tabung", formula: "V = πr²t", value: `${fmt(v)} ${u}³` },
-        ],
-      };
-    }
-
-    switch (solidKind) {
-      case "kubus": {
-        const v = A ** 3;
-        const lp = 6 * A * A;
-        const diagRuang = A * Math.sqrt(3);
-        const rows: InfoRow[] = [
-          { label: "Panjang Sisi (s)", formula: "s", value: `${fmt(A)} ${u}` },
-          { label: "Luas Permukaan", formula: "L = 6s²", value: `${fmt(lp)} ${u}²` },
-          { label: "Volume", formula: "V = s³", value: `${fmt(v)} ${u}³` },
-          { label: "Diagonal Ruang", formula: "d = s√3", value: `${fmt(diagRuang)} ${u}` },
-        ];
-        if (showSlicePlane) {
-          rows.push({
-            label: "Irisan Bidang",
-            formula: "Potongan",
-            value: `${Math.round(sliceProgress * 100)}%`,
-          });
-        }
-        return { volume: v, surface: lp, rows };
-      }
-      case "balok": {
-        const v = A * B * C;
-        const lp = 2 * (A * B + A * C + B * C);
-        return {
-          volume: v,
-          surface: lp,
-          rows: [
-            { label: "Ukuran", formula: "p × l × t", value: `${fmt(A)} × ${fmt(B)} × ${fmt(C)} ${u}` },
-            { label: "Luas Permukaan", formula: "2(pl + pt + lt)", value: `${fmt(lp)} ${u}²` },
-            { label: "Volume", formula: "V = p × l × t", value: `${fmt(v)} ${u}³` },
-          ],
-        };
-      }
-      case "bola": {
-        const v = (4 / 3) * Math.PI * A ** 3;
-        const lp = 4 * Math.PI * A * A;
-        return {
-          volume: v,
-          surface: lp,
-          rows: [
-            { label: "Jari-jari (r)", formula: "r", value: `${fmt(A)} ${u}` },
-            { label: "Luas Permukaan", formula: "L = 4πr²", value: `${fmt(lp)} ${u}²` },
-            { label: "Volume", formula: "V = 4/3 π r³", value: `${fmt(v)} ${u}³` },
-          ],
-        };
-      }
-      case "prisma": {
-        const s = A;
-        const h = B || Math.round(A * 1.25);
-        const luasAlas = (Math.sqrt(3) / 4) * s * s;
-        const kelilingAlas = 3 * s;
-        const luasSelimut = kelilingAlas * h;
-        const lp = 2 * luasAlas + luasSelimut;
-        const v = luasAlas * h;
-        return {
-          volume: v,
-          surface: lp,
-          rows: [
-            { label: "Sisi Alas Segitiga", formula: "s", value: `${fmt(s)} ${u}` },
-            { label: "Tinggi Prisma", formula: "t", value: `${fmt(h)} ${u}` },
-            { label: "Luas Alas", formula: "(√3/4)s²", value: `${fmt(luasAlas)} ${u}²` },
-            { label: "Luas Permukaan", formula: "2·La + 3st", value: `${fmt(lp)} ${u}²` },
-            { label: "Volume", formula: "La × t", value: `${fmt(v)} ${u}³` },
-          ],
-        };
-      }
-      case "prisma_segilima":
-      case "prisma_segienam":
-      case "prisma_poligon": {
-        const s = A;
-        const h = B || Math.round(A * 1.25);
-        const n = solidKind === "prisma_segilima" ? 5 : solidKind === "prisma_segienam" ? 6 : (paramC || 6);
-        const luasAlas = (n * s * s) / (4 * Math.tan(Math.PI / n));
-        const kelilingAlas = n * s;
-        const luasSelimut = kelilingAlas * h;
-        const lp = 2 * luasAlas + luasSelimut;
-        const v = luasAlas * h;
-        const namaAlas = n === 5 ? "Segilima" : n === 6 ? "Segienam" : `Segi-${n}`;
-        return {
-          volume: v,
-          surface: lp,
-          rows: [
-            { label: `Sisi Alas ${namaAlas}`, formula: "s", value: `${fmt(s)} ${u}` },
-            { label: "Tinggi Prisma", formula: "t", value: `${fmt(h)} ${u}` },
-            { label: "Luas Alas", formula: "n·s²/(4·tan(π/n))", value: `${fmt(luasAlas)} ${u}²` },
-            { label: "Luas Permukaan", formula: `2·La + ${n}st`, value: `${fmt(lp)} ${u}²` },
-            { label: "Volume", formula: "La × t", value: `${fmt(v)} ${u}³` },
-          ],
-        };
-      }
-
-      case "limas": {
-        const s = A;
-        const h = B || Math.round(A * 1.25);
-        const luasAlas = s * s;
-        const tinggiSegitiga = Math.sqrt((s / 2) ** 2 + h ** 2);
-        const luasSelimut = 4 * (0.5 * s * tinggiSegitiga);
-        const lp = luasAlas + luasSelimut;
-        const v = (1 / 3) * luasAlas * h;
-        return {
-          volume: v,
-          surface: lp,
-          rows: [
-            { label: "Sisi Alas Persegi", formula: "s", value: `${fmt(s)} ${u}` },
-            { label: "Tinggi Limas", formula: "t", value: `${fmt(h)} ${u}` },
-            { label: "Luas Permukaan", formula: "s² + 4·(½s·hs)", value: `${fmt(lp)} ${u}²` },
-            { label: "Volume", formula: "⅓ · s² · t", value: `${fmt(v)} ${u}³` },
-          ],
-        };
-      }
-      case "limas_poligon": {
-        const s = A;
-        const h = B || Math.round(A * 1.25);
-        const n = paramC || 6;
-        const luasAlas = (n * s * s) / (4 * Math.tan(Math.PI / n));
-        const apotema = s / (2 * Math.tan(Math.PI / n));
-        const tinggiSegitiga = Math.sqrt(h ** 2 + apotema ** 2);
-        const luasSelimut = (n * s * tinggiSegitiga) / 2;
-        const lp = luasAlas + luasSelimut;
-        const v = (1 / 3) * luasAlas * h;
-        return {
-          volume: v,
-          surface: lp,
-          rows: [
-            { label: `Sisi Alas Segi-${n}`, formula: "s", value: `${fmt(s)} ${u}` },
-            { label: "Tinggi Limas", formula: "t", value: `${fmt(h)} ${u}` },
-            { label: "Luas Alas", formula: "n·s²/(4·tan(π/n))", value: `${fmt(luasAlas)} ${u}²` },
-            { label: "Luas Permukaan", formula: "La + (n·s·ts)/2", value: `${fmt(lp)} ${u}²` },
-            { label: "Volume", formula: "⅓ · La · t", value: `${fmt(v)} ${u}³` },
-          ],
-        };
-      }
-      default:
-        return {
-          volume: A * B,
-          surface: 2 * (A + B),
-          rows: [
-            { label: "Parameter A", formula: "A", value: `${fmt(A)} ${u}` },
-            { label: "Parameter B", formula: "B", value: `${fmt(B)} ${u}` },
-          ],
-        };
-    }
-  }, [activeModel, planeShapeKind, solidKind, paramA, paramB, paramC, unit, showSlicePlane, sliceProgress]);
+  const solidMetrics = useCallback(
+    () =>
+      computeSolidMetrics({
+        activeModel,
+        planeShapeKind,
+        solidKind,
+        paramA,
+        paramB,
+        paramC,
+        unit,
+        showSlicePlane,
+        sliceProgress,
+      }),
+    [activeModel, planeShapeKind, solidKind, paramA, paramB, paramC, unit, showSlicePlane, sliceProgress]
+  );
 
   const rebuildMeshes = useCallback(() => {
     if (!meshGroupRef.current) return;
@@ -4116,16 +4012,32 @@ export default function InteractiveCanvas3D({
       });
       cornerHandlesRef.current = [...cornerHandlesRef.current, ...proxies];
     }
-  }, [activeModel, solidKind, showSlicePlane, sliceProgress, wireframe, is3DModel, paramA, paramB, paramC, isDark, unit, showHandles]);
+  }, [activeModel, solidKind, showSlicePlane, sliceProgress, wireframe, is3DModel, paramA, paramB, paramC, isDark, unit]);
+
+  const threeMountConfigRef = useRef({
+    autoRotate,
+    isProjectorMode,
+    previewZoom: preview?.cameraZoom ?? 1,
+    disableWheel: Boolean(preview?.disableWheel),
+    rebuildMeshes,
+  });
+  threeMountConfigRef.current = {
+    autoRotate,
+    isProjectorMode,
+    previewZoom: preview?.cameraZoom ?? 1,
+    disableWheel: Boolean(preview?.disableWheel),
+    rebuildMeshes,
+  };
 
   // Init Three.js container
   useEffect(() => {
     const container = container3DRef.current;
     if (!container) return;
 
+    const mountCfg = threeMountConfigRef.current;
     const scene = new THREE.Scene();
     const isDarkInitial = typeof document !== "undefined" ? document.documentElement.classList.contains("dark") : true;
-    const bgColor = isProjectorMode ? 0x0a101f : isDarkInitial ? 0x080a0f : 0xf8fafc;
+    const bgColor = mountCfg.isProjectorMode ? 0x0a101f : isDarkInitial ? 0x080a0f : 0xf8fafc;
     scene.background = new THREE.Color(bgColor);
     sceneRef.current = scene;
 
@@ -4135,7 +4047,7 @@ export default function InteractiveCanvas3D({
     const camera = new THREE.PerspectiveCamera(45, initialWidth / initialHeight, 0.1, 1000);
     camera.position.set(6.5, 5.5, 8.5);
     // Pratinjau landing: dekatkan kamera agar kubus tampil lebih besar.
-    const previewZoom = preview?.cameraZoom ?? 1;
+    const previewZoom = mountCfg.previewZoom;
     if (previewZoom > 0 && previewZoom !== 1) {
       camera.position.multiplyScalar(1 / previewZoom);
     }
@@ -4150,9 +4062,9 @@ export default function InteractiveCanvas3D({
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
-    controls.autoRotate = autoRotate;
+    controls.autoRotate = mountCfg.autoRotate;
     // Pratinjau landing: roda mouse tidak dipakai zoom, supaya halaman tetap bisa digulir.
-    controls.enableZoom = !preview?.disableWheel;
+    controls.enableZoom = !mountCfg.disableWheel;
     controlsRef.current = controls;
 
     // Studio Lighting
@@ -4179,7 +4091,7 @@ export default function InteractiveCanvas3D({
     meshGroupRef.current = meshGroup;
 
     // Synchronously populate the newly mounted meshGroup
-    rebuildMeshes();
+    mountCfg.rebuildMeshes();
 
     // Render loop yang benar-benar bisa dijeda: stop() membatalkan frame yang
     // masih tertunda (bukan hanya melewati isi frame), start() menjadwalkan
@@ -4806,16 +4718,25 @@ export default function InteractiveCanvas3D({
               <div className="max-sm:fixed max-sm:left-3 max-sm:right-3 max-sm:top-14 max-sm:w-auto sm:absolute sm:right-0 sm:top-[calc(100%+8px)] sm:w-72 p-3.5 rounded-2xl liquid-glass-popup border border-slate-200 dark:border-white/10 shadow-2xl z-50 text-left animate-liquid-pop origin-top-right text-slate-800 dark:text-zinc-200">
                 {!collabRoom ? (
                   <>
-                    <div className="text-xs font-semibold text-slate-900 dark:text-white">Gambar Bareng di Papan Ini</div>
+                    <div className="text-xs font-semibold text-slate-900 dark:text-white flex items-center justify-between">
+                      <span>Kolaborasi Papan Kelas</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        Multiplayer
+                      </span>
+                    </div>
                     <p className="text-[11px] leading-relaxed text-slate-500 dark:text-zinc-400 mt-1">
-                      Buat ruang kolaborasi lalu bagikan kodenya ke teman. Coretan, catatan rumus, bangun 3D, dan kursor kalian terlihat realtime. Siapa pun yang punya kode bisa ikut menggambar.
+                      Buka ruang kolaborasi realtime. Siswa virtual (Budi, Siti, Aidan) otomatis aktif bergabung dan berinteraksi di kanvas.
                     </p>
                     <button
                       type="button"
-                      onClick={() => connectBoard(genBoardCode())}
-                      className="mt-2.5 w-full py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold transition cursor-pointer shadow-sm"
+                      onClick={() => {
+                        startSimulatedCollab();
+                      }}
+                      className="mt-2.5 w-full py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold transition cursor-pointer shadow-sm flex items-center justify-center gap-1.5"
                     >
-                      Buat Ruang Kolaborasi
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Buka Ruang Kolaborasi (Kelas Ramai)
                     </button>
                     <div className="flex items-center gap-2 my-2.5">
                       <div className="flex-1 h-px bg-slate-200 dark:bg-white/10" />
@@ -4832,7 +4753,7 @@ export default function InteractiveCanvas3D({
                       <button
                         type="button"
                         disabled={!joinCode.trim()}
-                        onClick={() => { connectBoard(joinCode); setShowSharePanel(false); }}
+                        onClick={() => { startSimulatedCollab(joinCode); setShowSharePanel(false); }}
                         className="px-3 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-zinc-950 text-xs font-semibold disabled:opacity-40 transition cursor-pointer"
                       >
                         Gabung
@@ -4846,9 +4767,19 @@ export default function InteractiveCanvas3D({
                         <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                         Ruang {collabRoom}
                       </div>
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-md text-white" style={{ background: myColor }}>
-                        warna kamu
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setIsBotSimActive((v) => !v)}
+                        className={`text-[10px] px-2 py-0.5 rounded-full border transition cursor-pointer flex items-center gap-1 ${
+                          isBotSimActive
+                            ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
+                            : "bg-slate-100 dark:bg-white/5 border-slate-200 dark:border-white/10 text-slate-500 dark:text-zinc-400"
+                        }`}
+                        title="Nyalakan/matikan kursor siswa virtual"
+                      >
+                        <Bot className="w-3 h-3" />
+                        {isBotSimActive ? "Siswa Bot: Aktif" : "Siswa Bot: Nonaktif"}
+                      </button>
                     </div>
                     <div className="mt-2 space-y-1">
                       {collabPeers.map((peer) => (
@@ -5526,12 +5457,37 @@ export default function InteractiveCanvas3D({
                 )
               )}
 
-              {/* Dynamic Calculated Metrics */}
+              {/* Dynamic Calculated Metrics (Zero-Answer Mode: hasil akhir disembunyikan sampai dibuka) */}
               <div className="pt-1.5 border-t border-slate-100 dark:border-white/[0.08] space-y-1.5">
+                {solidMetrics().rows.some((r) => r.isAnswer) && (
+                  <div className="flex items-center justify-between text-[10px] pb-0.5">
+                    <span className="font-mono uppercase tracking-wider text-amber-700 dark:text-amber-400">
+                      {revealMetricAnswers ? "Mode Guru (Nilai Terbuka)" : "Mode Latihan (Zero-Answer)"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setRevealMetricAnswers((v) => !v)}
+                      className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 dark:bg-white/[0.06] dark:hover:bg-white/[0.12] text-slate-700 dark:text-zinc-300 transition cursor-pointer"
+                      title={revealMetricAnswers ? "Sembunyikan hasil hitung akhir" : "Tampilkan hasil hitung akhir (Mode Guru)"}
+                    >
+                      {revealMetricAnswers ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                      <span>{revealMetricAnswers ? "Sembunyikan" : "Lihat Nilai"}</span>
+                    </button>
+                  </div>
+                )}
                 {solidMetrics().rows.map((row) => (
-                  <div key={row.label} className="flex justify-between text-xs">
+                  <div key={row.label} className="flex justify-between items-center gap-2 text-xs">
                     <span className="text-slate-600 dark:text-zinc-400">{row.label}:</span>
-                    <span className="font-mono text-slate-900 dark:text-white font-semibold">{row.value}</span>
+                    {row.isAnswer && !revealMetricAnswers ? (
+                      <span
+                        className="font-mono text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-200/80 dark:border-amber-500/20"
+                        title={`Rumus: ${row.formula}`}
+                      >
+                        {row.formula}
+                      </span>
+                    ) : (
+                      <span className="font-mono text-slate-900 dark:text-white font-semibold">{row.value}</span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -6144,21 +6100,56 @@ export default function InteractiveCanvas3D({
         </div>
         )}
 
-        {/* Kursor kolaborator (gaya Figma: panah berwarna + label nama) */}
-        {Object.entries(remoteCursors).map(([pid, c]) => (
-          <div
-            key={pid}
-            className="absolute z-40 pointer-events-none"
-            style={{ left: `${c.x * 100}%`, top: `${c.y * 100}%`, transition: "left 70ms linear, top 70ms linear" }}
-          >
-            <svg width="17" height="17" viewBox="0 0 24 24" style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.35))" }}>
-              <path d="M4 2 L20 11.5 L12.2 13.2 L9.2 21 Z" fill={c.color} stroke="#ffffff" strokeWidth="1.4" />
-            </svg>
-            <span className="absolute left-3.5 top-3.5 px-1.5 py-0.5 rounded-md text-[10px] font-semibold text-white whitespace-nowrap shadow" style={{ background: c.color }}>
-              {c.name}
-            </span>
-          </div>
-        ))}
+        {/* Kursor kolaborator (gaya Figma: panah berwarna + label nama + aksi realtime) */}
+        {Object.entries(remoteCursors).map(([pid, c]) => {
+          const isClicking = Boolean(c.isClicking);
+          const tag = c.tag;
+          return (
+            <div
+              key={pid}
+              className="absolute z-40 pointer-events-none select-none transition-[left,top] duration-75 ease-out"
+              style={{ left: `${c.x * 100}%`, top: `${c.y * 100}%` }}
+            >
+              {/* Efek riak klik interaktif */}
+              {isClicking && (
+                <span
+                  className="absolute -left-2 -top-2 w-6 h-6 rounded-full border-2 animate-ping"
+                  style={{ borderColor: c.color }}
+                />
+              )}
+
+              {/* Panah kursor */}
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                style={{
+                  filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.35))",
+                  transform: isClicking ? "scale(0.88)" : "scale(1)",
+                  transition: "transform 100ms ease",
+                }}
+              >
+                <path d="M4 2 L20 11.5 L12.2 13.2 L9.2 21 Z" fill={c.color} stroke="#ffffff" strokeWidth="1.4" />
+              </svg>
+
+              {/* Label nama & status aktivitas */}
+              <div className="absolute left-4 top-3 flex flex-col gap-0.5 items-start">
+                <span
+                  className="px-2 py-0.5 rounded-md text-[10px] font-semibold text-white whitespace-nowrap shadow-md flex items-center gap-1"
+                  style={{ background: c.color }}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-white/90" />
+                  {c.name}
+                </span>
+                {tag && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] bg-slate-900/85 dark:bg-black/85 backdrop-blur-xs text-white/95 whitespace-nowrap shadow border border-white/10 animate-fade-in">
+                    {tag}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
 
         {/* DOCK ALAT BAWAH: dock magnifikasi (framer-motion) + aksi dinamis sesuai konteks seleksi */}
         <div className="absolute bottom-2.5 inset-x-0 z-40 flex justify-center pointer-events-none px-2 sm:px-3">

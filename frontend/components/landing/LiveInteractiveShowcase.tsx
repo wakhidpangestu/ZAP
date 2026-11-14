@@ -217,7 +217,7 @@ function TerminalCasDemo({ lang }: { lang: "id" | "en" }) {
     return () => {
       cancelled = true;
     };
-  }, [lang, data]);
+  }, [lang, data, inViewRef]);
 
   return (
     <div ref={rootRef} className="relative w-full max-w-[760px] mx-auto text-left rounded-2xl border border-zinc-800 bg-[#1a1b1e] shadow-2xl overflow-hidden">
@@ -489,7 +489,7 @@ function StudioBrowserDemo({ lang }: { lang: "id" | "en" }) {
     return () => {
       cancelled = true;
     };
-  }, [lang]);
+  }, [lang, inViewRef]);
 
   const isSearching = messages.some((m) => m.role === "assistant" && m.searching);
 
