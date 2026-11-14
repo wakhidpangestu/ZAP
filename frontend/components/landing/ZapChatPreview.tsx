@@ -295,13 +295,78 @@ function ChatBody() {
   );
 }
 
-function CanvasPlaceholder() {
+function CanvasPlaceholder({ onActivate }: { onActivate?: () => void }) {
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-slate-50 text-zinc-500 dark:bg-[#080a0f] dark:text-zinc-400">
-      <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-white/[0.08] dark:bg-white/[0.04]">
-        <ZapLogo className="h-4 w-4" />
-      </span>
-      <span className="text-[10.5px] font-medium">Menyiapkan papan tulis…</span>
+    <div
+      onClick={onActivate}
+      className="group relative flex h-full w-full flex-col items-center justify-center overflow-hidden bg-slate-50 p-6 text-zinc-500 transition-colors cursor-pointer select-none dark:bg-[#080a0f] dark:text-zinc-400"
+    >
+      {/* Background isometric grid lines */}
+      <svg
+        className="pointer-events-none absolute inset-0 h-full w-full opacity-40 dark:opacity-20"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <defs>
+          <pattern id="iso-grid-bg" width="30" height="30" patternUnits="userSpaceOnUse">
+            <path d="M 30 0 L 0 30 M 0 0 L 30 30" fill="none" stroke="currentColor" strokeWidth="0.5" strokeOpacity="0.3" />
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#iso-grid-bg)" />
+      </svg>
+
+      {/* Isometric 3D Cube Preview (Identik dengan solid cube r=6cm Smartboard) */}
+      <div className="relative z-10 transition-transform duration-500 group-hover:scale-105">
+        <svg
+          viewBox="0 0 280 240"
+          className="h-44 w-52 drop-shadow-[0_12px_24px_rgba(0,0,0,0.1)] dark:drop-shadow-[0_16px_32px_rgba(0,0,0,0.4)]"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          {/* Top Face */}
+          <polygon
+            points="140,35 210,75 140,115 70,75"
+            className="fill-amber-500/15 stroke-amber-500/70 dark:fill-amber-400/20 dark:stroke-amber-400/80"
+            strokeWidth="2"
+            strokeLinejoin="round"
+          />
+          {/* Left Face */}
+          <polygon
+            points="70,75 140,115 140,195 70,155"
+            className="fill-amber-600/25 stroke-amber-600/80 dark:fill-amber-500/30 dark:stroke-amber-400/90"
+            strokeWidth="2"
+            strokeLinejoin="round"
+          />
+          {/* Right Face */}
+          <polygon
+            points="140,115 210,75 210,155 140,195"
+            className="fill-amber-500/20 stroke-amber-500/75 dark:fill-amber-400/25 dark:stroke-amber-400/85"
+            strokeWidth="2"
+            strokeLinejoin="round"
+          />
+
+          {/* Internal hidden dashed edges */}
+          <line x1="70" y1="155" x2="140" y2="115" stroke="currentColor" strokeDasharray="3 3" strokeOpacity="0.35" strokeWidth="1.2" />
+          <line x1="210" y1="155" x2="140" y2="115" stroke="currentColor" strokeDasharray="3 3" strokeOpacity="0.35" strokeWidth="1.2" />
+          <line x1="140" y1="35" x2="140" y2="115" stroke="currentColor" strokeDasharray="3 3" strokeOpacity="0.35" strokeWidth="1.2" />
+
+          {/* Dimension Labels */}
+          <text x="96" y="145" fontSize="10.5" fontFamily="ui-monospace, monospace" fontWeight="600" className="fill-amber-700 dark:fill-amber-300">
+            r = 6 cm
+          </text>
+          <text x="178" y="145" fontSize="10.5" fontFamily="ui-monospace, monospace" fontWeight="600" className="fill-amber-700 dark:fill-amber-300">
+            r = 6 cm
+          </text>
+          <text x="144" y="68" fontSize="10.5" fontFamily="ui-monospace, monospace" fontWeight="600" className="fill-amber-700 dark:fill-amber-300">
+            r = 6 cm
+          </text>
+        </svg>
+      </div>
+
+      {/* Floating Interactive Badge */}
+      <div className="relative z-10 mt-2 flex items-center gap-1.5 rounded-full border border-zinc-200/90 bg-white/90 px-3 py-1 text-[10px] font-medium text-zinc-700 shadow-sm backdrop-blur-xs transition-colors group-hover:border-amber-400/60 group-hover:bg-amber-50/80 group-hover:text-amber-900 dark:border-white/10 dark:bg-black/50 dark:text-zinc-300 dark:group-hover:border-amber-400/40 dark:group-hover:bg-amber-950/40 dark:group-hover:text-amber-200">
+        <Box className="h-3 w-3 text-amber-500" />
+        <span>Papan Tulis Virtual 3D · Klik atau sentuh untuk memutar</span>
+      </div>
     </div>
   );
 }
@@ -426,7 +491,18 @@ function SmartboardPanel() {
       (entries) => {
         const visible = entries.some((entry) => entry.isIntersecting);
         setInView(visible);
-        if (visible) setMounted(true);
+        if (visible) {
+          // Defer Three.js mounting to idle time so it doesn't block initial page load / TBT
+          if (typeof window !== "undefined") {
+            const win = window as unknown as {
+              requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+            };
+            const idleFn =
+              win.requestIdleCallback ||
+              ((cb: () => void) => window.setTimeout(cb, 3200));
+            idleFn(() => setMounted(true), { timeout: 4000 });
+          }
+        }
       },
       { rootMargin: "240px 0px" }
     );
@@ -455,6 +531,7 @@ function SmartboardPanel() {
   // Tab 3D / 2D / Papan di dalam Smartboard diarahkan ke preset yang sudah
   // terisi (bukan mode kosong), supaya objek tidak hilang saat berpindah tab.
   const handleSceneChange = useCallback((id: "3d" | "2d" | "papan") => {
+    setMounted(true);
     const index = DEMO_SCENES.findIndex((item) => item.id === id);
     if (index >= 0) setSceneIndex(index);
     setSceneToken((token) => token + 1);
@@ -477,8 +554,12 @@ function SmartboardPanel() {
   return (
     <aside
       ref={ref}
-      onPointerDownCapture={() => setUserTookOver(true)}
-      className="hidden w-[45%] min-w-[380px] max-w-[540px] shrink-0 flex-col border-l border-zinc-200/80 bg-zinc-50 lg:flex dark:border-white/[0.06] dark:bg-[#080a0f]"
+      onPointerEnter={() => setMounted(true)}
+      onPointerDownCapture={() => {
+        setMounted(true);
+        setUserTookOver(true);
+      }}
+      className="hidden w-[45%] min-w-[380px] max-w-[540px] shrink-0 flex-col border-l border-zinc-200/80 bg-zinc-50 lg:flex dark:border-white/[0.06] dark:bg-[#080a0f] cursor-pointer"
     >
       <div className="relative flex h-full w-full flex-col bg-zinc-50 dark:bg-[#080a0f]">
         {mounted && isDesktop ? (
@@ -497,7 +578,7 @@ function SmartboardPanel() {
             preview={preview}
           />
         ) : (
-          <CanvasPlaceholder />
+          <CanvasPlaceholder onActivate={() => setMounted(true)} />
         )}
 
         {isBoardScene && <DemoWhiteboard />}

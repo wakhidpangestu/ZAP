@@ -30,10 +30,27 @@ import {
 } from "@/components/site/KineticViz";
 import ActionButton from "@/components/landing/ActionButton";
 import { ZapChatScrollHero } from "@/components/landing/ZapChatScrollHero";
-import { ModelShowcase } from "@/components/landing/ModelShowcase";
-import { VaultStage } from "@/components/landing/VaultStage";
-import { FaqSection } from "@/components/landing/FaqSection";
-import { ClosingCta } from "@/components/landing/ClosingCta";
+import dynamic from "next/dynamic";
+
+const ModelShowcase = dynamic(
+  () => import("@/components/landing/ModelShowcase").then((m) => m.ModelShowcase),
+  { ssr: true }
+);
+
+const VaultStage = dynamic(
+  () => import("@/components/landing/VaultStage").then((m) => m.VaultStage),
+  { ssr: false }
+);
+
+const FaqSection = dynamic(
+  () => import("@/components/landing/FaqSection").then((m) => m.FaqSection),
+  { ssr: true }
+);
+
+const ClosingCta = dynamic(
+  () => import("@/components/landing/ClosingCta").then((m) => m.ClosingCta),
+  { ssr: true }
+);
 
 const WORKFLOW = [
   {

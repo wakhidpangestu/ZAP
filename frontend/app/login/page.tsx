@@ -220,7 +220,7 @@ export default function LoginPage() {
                   onClick={() => {
                     window.location.href = "/chat";
                   }}
-                  className="w-full py-2.5 px-4 min-h-[40px] rounded-[10px] bg-[#09090b] hover:bg-zinc-800 text-white dark:bg-white dark:hover:bg-zinc-200 dark:text-[#09090b] font-semibold text-xs flex items-center justify-center gap-2 transition active:scale-[0.99] cursor-pointer"
+                  className="w-full py-2.5 px-4 min-h-[40px] rounded-[10px] bg-[#1c120c] hover:bg-[#2c1c13] text-white dark:bg-white/[0.08] dark:hover:bg-white/[0.14] dark:border dark:border-white/[0.12] dark:text-[#f5e9dc] font-semibold text-xs flex items-center justify-center gap-2 transition active:scale-[0.99] cursor-pointer"
                 >
                   <span>Lanjutkan ke ChatZAP</span>
                   <ArrowRight className="w-3.5 h-3.5" />
@@ -369,7 +369,7 @@ export default function LoginPage() {
                     <button
                       type="submit"
                       disabled={isSubmitting}
-                      className="w-full py-2.5 px-4 min-h-[40px] rounded-[10px] bg-[#09090b] hover:bg-zinc-800 text-white dark:bg-white dark:hover:bg-zinc-200 dark:text-[#09090b] font-semibold text-xs flex items-center justify-center gap-2 transition active:scale-[0.99] cursor-pointer shadow-xs disabled:opacity-60 mt-1"
+                      className="w-full py-2.5 px-4 min-h-[40px] rounded-[10px] bg-[#1c120c] hover:bg-[#2c1c13] text-white dark:bg-white/[0.08] dark:hover:bg-white/[0.14] dark:border dark:border-white/[0.12] dark:text-[#f5e9dc] font-semibold text-xs flex items-center justify-center gap-2 transition active:scale-[0.99] cursor-pointer shadow-xs disabled:opacity-60 mt-1"
                     >
                       {isSubmitting ? (
                         <>
@@ -438,7 +438,7 @@ export default function LoginPage() {
                   <button
                     type="submit"
                     disabled={isSubmitting}
-                    className="w-full py-2.5 px-4 min-h-[40px] rounded-[10px] bg-[#09090b] hover:bg-zinc-800 text-white dark:bg-white dark:hover:bg-zinc-200 dark:text-[#09090b] font-semibold text-xs flex items-center justify-center gap-2 transition active:scale-[0.99] cursor-pointer shadow-xs disabled:opacity-60"
+                    className="w-full py-2.5 px-4 min-h-[40px] rounded-[10px] bg-[#1c120c] hover:bg-[#2c1c13] text-white dark:bg-white/[0.08] dark:hover:bg-white/[0.14] dark:border dark:border-white/[0.12] dark:text-[#f5e9dc] font-semibold text-xs flex items-center justify-center gap-2 transition active:scale-[0.99] cursor-pointer shadow-xs disabled:opacity-60"
                   >
                     <span>{isSubmitting ? "Menyiapkan Sesi..." : "Masuk sebagai Tamu"}</span>
                     <ArrowRight className="w-3.5 h-3.5" />
