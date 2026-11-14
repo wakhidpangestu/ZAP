@@ -231,6 +231,26 @@ body {
   font-size: 1.12em;
 }
 
+/* Guard against SVG radical expansion & MathML bleed across browsers */
+.katex .hide-tail {
+  overflow: hidden !important;
+  position: relative !important;
+}
+
+.katex svg {
+  position: absolute !important;
+}
+
+.katex-mathml {
+  clip: rect(1px, 1px, 1px, 1px) !important;
+  border: 0 !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  position: absolute !important;
+  width: 1px !important;
+}
+
 /* Animated gradient for the logo */
 @keyframes gradient-shift {
   0% {

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
+import "katex/dist/katex.min.css";
 import "./globals.css";
 
 export const viewport: Viewport = {
