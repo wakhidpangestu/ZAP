@@ -5328,24 +5328,24 @@ export default function ZAPApp() {
                 </div>
               </div>
 
-              {/* Pemantik pertama: tiga jalur nyata 1-klik (SymPy CFL, grafik 2D, 3D + irisan)
+              {/* Pemantik pertama: tiga jalur nyata 1-klik (SymPy ROOT_LOSS, gelombang 2D, permukaan 3D)
                   yang langsung menampilkan keunggulan ZAP tanpa error. */}
               <div className="w-full max-w-3xl lg:max-w-4xl mt-3 flex flex-wrap items-center justify-start gap-2 px-1">
                 {[
                   {
-                    label: "Cari galat: (x + 3)²",
+                    label: "Misteri Akar Hilang: x² = 5x",
                     icon: FlaskConical,
-                    text: "Cek coretan saya:\n(x + 3)^2 - 4 = 0\nx^2 + 9 - 4 = 0\nx^2 + 5 = 0",
+                    text: "Tolong cek langkah saya: x^2 = 5x -> kedua ruas dibagi x -> x = 5",
                   },
                   {
-                    label: "Grafik Parabola y = x² − 3",
+                    label: "Gelombang Sinus y = 2 sin(x)",
                     icon: Compass,
-                    text: "Tampilkan grafik parabola y = x^2 - 3 di papan tulis 2D",
+                    text: "Tampilkan grafik gelombang sinus y = 2 sin(x) di papan tulis 2D",
                   },
                   {
-                    label: "Kubus 3D + Irisan Bidang",
+                    label: "Pelana Kuda 3D (z = x² − y²)",
                     icon: Box,
-                    text: "Tampilkan kubus 10 cm dengan irisan bidang 3D",
+                    text: "Tampilkan permukaan pelana kuda 3D z = x^2 - y^2",
                   },
                 ].map((item) => (
                   <button

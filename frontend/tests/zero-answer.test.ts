@@ -47,27 +47,29 @@ describe("Zero-Answer Guardrail (lib/zero-answer)", () => {
 });
 
 describe("Starter Templates & Geometry Intent Resolution", () => {
-  it("resolves 2D parabola template to 2d_quadratic without geometry-clarify error", () => {
+  it("resolves 2D sine wave template to 2d_trig without guardrail mangling", () => {
     const res = resolveGeometricIntent(
-      "Tampilkan grafik parabola y = x^2 - 3 di papan tulis 2D"
+      "Tampilkan grafik gelombang sinus y = 2 sin(x) di papan tulis 2D"
     );
     expect(res).not.toBeNull();
     expect(res?.dimension).toBe("2D");
-    expect(res?.smartboardItem?.model).toBe("2d_quadratic");
-    expect(res?.smartboardItem?.paramA).toBe(1);
-    expect(res?.smartboardItem?.paramB).toBe(0);
-    expect(res?.smartboardItem?.paramC).toBe(-3);
+    expect(res?.smartboardItem?.model).toBe("2d_trig");
+    expect(res?.smartboardItem?.paramA).toBe(2);
+    expect(res?.smartboardItem?.paramB).toBe(1);
+    const guarded = sanitizeZeroAnswer(res?.reply || "");
+    expect(guarded).not.toContain("Berapakah nilainya");
   });
 
-  it("resolves Kubus 3D + Irisan Bidang template with hasSlice=true", () => {
+  it("resolves 3D saddle surface template to saddle without guardrail mangling", () => {
     const res = resolveGeometricIntent(
-      "Tampilkan kubus 10 cm dengan irisan bidang 3D"
+      "Tampilkan permukaan pelana kuda 3D z = x^2 - y^2"
     );
     expect(res).not.toBeNull();
     expect(res?.dimension).toBe("3D");
-    expect(res?.smartboardItem?.model).toBe("solids");
-    expect(res?.smartboardItem?.solidKind).toBe("kubus");
-    expect(res?.smartboardItem?.hasSlice).toBe(true);
+    expect(res?.smartboardItem?.model).toBe("saddle");
+    const guarded = sanitizeZeroAnswer(res?.reply || "");
+    expect(guarded).toContain("z = x^2 - y^2");
+    expect(guarded).not.toContain("Berapakah nilainya");
   });
 
   it("keeps Balok 10x6x4 reply intact after sanitizeZeroAnswer", () => {

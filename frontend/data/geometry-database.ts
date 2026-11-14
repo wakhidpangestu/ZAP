@@ -969,7 +969,7 @@ export function resolveGeometricIntent(
         entity: GEOMETRY_DATABASE.shapes_3d[0],
         params: { a: 1, b: 1 },
         unit: "satuan",
-        reply: `Permukaan kuadrik 3D **Pelana Kuda (Hiperbolik Paraboloid)** telah **AKTIF** di Papan Tulis Pintar 3D! 🎉\n\n### Persamaan Permukaan ($z = x^2 - y^2$):\n- **Sumbu-$x$ ($y=0$):** kurva membuka ke atas ($z = x^2$).\n- **Sumbu-$y$ ($x=0$):** kurva membuka ke bawah ($z = -y^2$).\n- **Titik Pelana (*Saddle Point*):** berada di titik asal $(0, 0, 0)$ — minimum di satu arah namun maksimum di arah tegak lurusnya.\n\n💡 **Tantangan Eksplorasi 3D:** Putar permukaan 3D di kanvas! Jika kita mengiris permukaan ini pada bidang $x = y$, bentuk kurva apa yang terlihat pada ketinggian $z$?`,
+        reply: `Permukaan kuadrik 3D **Pelana Kuda (Hiperbolik Paraboloid)** telah **AKTIF** di Papan Tulis Pintar 3D! 🎉\n\n### Persamaan Permukaan ($z = x^2 - y^2$):\n- **Sepanjang sumbu-$x$:** kurva membuka ke atas ($z = x^2$).\n- **Sepanjang sumbu-$y$:** kurva membuka ke bawah ($z = -y^2$).\n- **Titik Pelana (*Saddle Point*):** berada di titik pusat simetri $(0, 0, 0)$ — minimum di satu arah namun maksimum di arah tegak lurusnya.\n\n💡 **Tantangan Eksplorasi 3D:** Putar permukaan 3D di kanvas! Jika kita memotong permukaan ini pada bidang di mana $x$ dan $y$ bernilai sama, berapa ketinggian $z$ yang terbentuk di sepanjang garis potongnya?`,
         smartboardItem: {
           targetTab: "3d",
           model: "saddle",
