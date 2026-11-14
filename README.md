@@ -5,7 +5,7 @@
 [![Kategori](https://img.shields.io/badge/Kategori-Web_Application_(MVP)-2563EB?style=for-the-badge)](https://github.com/wakhidpangestu/ZAP)
 [![License: MIT](https://img.shields.io/badge/License-MIT-38BDF8?style=for-the-badge)](LICENSE)
 [![Pytest Passing](https://img.shields.io/badge/Pytest-127%20%2B%2029_Passing-059669?style=for-the-badge)](backend/tests/)
-[![Vitest Passing](https://img.shields.io/badge/Vitest-16%2F16_Passing-16A34A?style=for-the-badge)](frontend/tests/)
+[![Vitest Passing](https://img.shields.io/badge/Vitest-20%2F20_Passing-16A34A?style=for-the-badge)](frontend/tests/)
 
 > **"Don't give them answers. Project the wonder to discover."**  
 > ZAP adalah platform pembelajaran matematika *Web-First* yang mengubah rumus dan persamaan aljabar menjadi **bangun ruang 3D interaktif secara real-time** (Three.js/WebGL), dipandu oleh **Tutor Sokratik berpagar Zero Answer Policy**, dan diverifikasi kebenaran matematisnya secara deterministik oleh mesin aljabar simbolik (**SymPy**).
@@ -61,7 +61,8 @@ Sesuai ketentuan resmi **Guidebook LOGICODIX 2026 (Bab Submission & Ketentuan RE
 | **Papan Tulis Pintar 3-in-1 (Persistent)** | ✅ Aktif | Kanvas geometri 3D, plotter kurva 2D, dan coretan kapur interaktif dengan pemulihan state instan saat berpindah tab kanvas. |
 | **Modern Adaptive Dock & Copilot** | ✅ Aktif | Bilah alat (*floating dock*) dengan dukungan gulir horizontal (*overflow scroll*) di layar kecil serta posisi Copilot ergonomis di atas dock. |
 | **Multi-Domain Verified Corpus & Harvester** | ✅ Aktif | Pipa korpus terverifikasi SymPy (Matematika TK–S3, Pemrograman, Fisika, Kimia) dengan 4 sumber internet aktif termasuk Kurikulum Indonesia via Wikimedia REST v1 (`id.wikipedia.org`). |
-| **Ekstraksi PDF & Konteks Visual Multi-Turn** | ✅ Aktif | Pembacaan teks PDF server-side via `unpdf` (dan `inline_data` PDF untuk Gemini) serta penerusan otomatis hingga 2 gambar terbaru (`recentImages`) untuk pertanyaan lanjutan. |
+| **Ekstraksi PDF/Office & Anti-413 Auto-Compress** | ✅ Aktif | Kompresi JPEG progresif sisi klien (`<= 280 KB`), ekstraksi teks PDF besar via `unpdf` serta slide `.pptx`/`.docx`/`.xlsx` di peramban agar body JSON tetap `<= 780 KB` di balik proxy 1 MB, sambil menjaga pratinjau penuh PDF (`blob:`/`data:` URL di `FilePreviewModal`) serta pemangkasan payload aman di `ShareModal` & Cloud Sync. |
+| **Konteks Visual Multi-Turn & PDF Server** | ✅ Aktif | Ekstraksi PDF server-side via `unpdf` (`lib/pdf-extract.ts`) + `inline_data` PDF untuk Gemini serta penerusan otomatis hingga 2 gambar terbaru (`recentImages`) pada pertanyaan lanjutan. |
 | **Agent Memory Harness & Flywheel** | ✅ Aktif | Penyimpanan memori episodik agen Sokratik dengan isolasi penuh per-pengguna dan proteksi gerbang rahasia (*secret gate*). |
 | **Dual-Tier Vault, Sesi 30 Hari & PG Store** | ✅ Aktif | Enkripsi zero-knowledge AES-256-GCM sisi klien, token sesi Google/Akun 30 hari (`POST /api/auth/google`), persistensi `ownerSecret` tautan share, serta adapter opsional PostgreSQL (`zap_kv_store`) dengan fallback ke `.zap_vault` / `/tmp` / memori. |
 | **Reasoning Effort Scaling & Stream Fallback** | ✅ Aktif | Anggaran `max_tokens` beradaptasi dengan tingkat penalaran (`low`/`medium`/`high` & multimodal 1200–4096 token) plus fallback `delta.reasoning_content` pada stream SSE OpenAI-compatible. |
@@ -144,7 +145,8 @@ graph TD
   * `components/GoogleAuthButton.tsx`: Autentikasi Google SSO dengan pertukaran token sesi 30 hari melalui `/api/auth/google`.
   * `components/MathView.tsx` & `components/RichChatText.tsx`: Renderer LaTeX KaTeX dan Markdown Sokratik.
   * `lib/`: Utilitas inti server/klien (`kv-store.ts`, `pdf-extract.ts`, `zero-answer.ts`, `account-session.ts`, `vault-dir.ts`, `atomic-file.ts`).
-  * `tests/`: Suite uji otomatis Vitest (`zero-answer.test.ts`, `auth-session.test.ts`, `rate-limit-and-vault.test.ts`, `pdf-and-routes.test.ts`).
+  * `tests/`: Suite uji otomatis Vitest (`zero-answer.test.ts`, `auth-session.test.ts`, `rate-limit-and-vault.test.ts`, `pdf-and-routes.test.ts`, `upload-compress.test.ts`).
+  * `utils/`: Sinkronisasi akun, chat memory windowing, bounded rate-limit, serta kompresi & ekstraksi lampiran (`upload-compress.ts`).
 * **Struktur Aset (`assets/` & `frontend/public/`):**
   * `assets/zappy-mascot/`: Maskot 3D resmi "ZAPPY" (model glTF 2.0 prosedural PBR: `out/zapy_*.glb` dan ekspresi wajah `out/zapy_head_*.glb`).
   * `frontend/public/`: Ikonografi SVG, font matematika KaTeX, dan manifest PWA.
@@ -191,7 +193,7 @@ python -m pytest -q -p no:cacheprovider tests/
 # 3. Frontend unit & route tests (dari folder frontend/)
 cd frontend
 npm test
-# ===================== Test Files 4 passed (4), 16 passed ======================
+# ===================== Test Files 5 passed (5), 20 passed ======================
 npm run typecheck
 npm run lint
 npm run build
@@ -233,7 +235,8 @@ npm run build
   * Filter PII (NIK ditolak seketika, alamat email disanitasi).
   * Ekspor data terenkripsi dan penghapusan menyeluruh (*Right to be Forgotten*).
 
-#### 3. Frontend & API Route Verification (`frontend/tests/` — 16 Tests Vitest Lolos):
+#### 3. Frontend & API Route Verification (`frontend/tests/` — 20 Tests Vitest Lolos):
+* ✅ **Kompresi Unggahan, Ekstraksi Office/PDF & Anti-413 (`upload-compress.test.ts`):** Ekstraksi slide `.pptx` di browser, ekstraksi teks PDF besar sisi klien, pembatasan budget JSON `/api/chat` (`<= 780 KB`), serta pemangkasan lampiran & penanganan respons non-JSON 413 di `ShareModal`.
 * ✅ **Zero-Answer & Cleaning (`zero-answer.test.ts`):** Penyensoran nilai deklaratif + math span sesuai `targetVariable`, penghapusan `<think>`/`<thought>`, dan fallback Sokratik.
 * ✅ **Sesi 30 Hari & Token Google (`auth-session.test.ts`):** Penandatanganan + verifikasi token HMAC 30 hari, deteksi kedaluwarsa JWT Google (`isJwtExpired`), dan peralihan otomatis token sinkronisasi.
 * ✅ **Rate Limiter, Vault Paths & Memory (`rate-limit-and-vault.test.ts`):** Pruning bucket rate limiter agar memori tetap terikat (`<= 5000` kunci), resolusi direktori vault fallback, windowing riwayat chat, dan fallback kuota `localStorage`.
@@ -430,8 +433,8 @@ logicodix/
 │   ├── components/           # Komponen UI (InteractiveCanvas3D, ModelPickerWithEffort, ShareModal, chat/* modals)
 │   ├── data/                 # Basis data geometri sisi klien untuk kalkulasi kanvas cepat
 │   ├── lib/                  # KV PostgreSQL adapter, ekstraksi PDF unpdf, guardrail, sesi 30 hari, vault atomik
-│   ├── tests/                # 16 Automated Tests Vitest (guardrail, session, rate-limit, PDF, routes & middleware)
-│   ├── utils/                # Sinkronisasi akun, chat memory windowing, bounded rate-limit & kriptografi
+│   ├── tests/                # 20 Automated Tests Vitest (guardrail, session, rate-limit, compress/PDF, routes & middleware)
+│   ├── utils/                # Sinkronisasi akun, chat memory, bounded rate-limit, upload-compress & kriptografi
 │   ├── vitest.config.ts      # Konfigurasi test runner Vitest
 │   ├── .env.example          # Template konfigurasi variabel lingkungan frontend
 │   └── package.json          # Dependensi produksi & skrip tes Node.js

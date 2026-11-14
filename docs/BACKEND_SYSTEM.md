@@ -125,11 +125,12 @@ Keduanya berbagi pagar Zero Answer Policy yang sama.
 ## 7. Pengujian
 
 ```bash
-cd backend
-python -m pytest -p no:cacheprovider tests/ tests_platform/
+# Dari root repositori (127 backend tests + 29 root tests)
+python -m pytest -q
+python -m pytest -q -p no:cacheprovider tests/
+
+# Dari folder frontend/ (20 Vitest unit & route tests)
+cd frontend && npm test
 ```
 
-Suite `tests/` adalah suite CFL asli dan tidak diubah. Suite
-`tests_platform/` menguji kriptografi, autentikasi, penyimpanan, gateway,
-privasi, dan pipa self-learning dengan transport HTTP tiruan sehingga tidak
-ada panggilan jaringan nyata saat pengujian.
+Suite `backend/tests/` menguji mesin CFL, harvester Kurikulum Indonesia (Wikimedia REST v1 + SymPy), dan memori harness. Suite `backend/tests_platform/` menguji kriptografi, autentikasi, penyimpanan, gateway, privasi, dan pipa self-learning dengan transport HTTP tiruan. Suite `frontend/tests/` menguji guardrail Zero-Answer, sesi 30 hari, ekstraksi PDF/Office, kompresi anti-413, `ShareModal`, rate limiter, dan middleware.

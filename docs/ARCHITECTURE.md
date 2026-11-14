@@ -49,7 +49,7 @@ graph TD
 
 Dalam sistem ZAP, model AI generatif (Gemini / ChatGPT) **sama sekali dilarang** menghitung aljabar secara independen atau menentukan validitas langkah matematika. Alasan teknis:
 1. **Pencegahan Halusinasi Angka:** Model bahasa alami rentan terhadap kesalahan aritmetika dan tanda minus pada persamaan kuadrat atau matriks 3D.
-2. **Kemandirian Terhadap Tingkat Model (Model Invariance):** Karena SymPy menangani 100% beban komputasi matematika dan penghitungan koordinat poligon, model AI gratisan/ringan sekalipun (seperti Gemini 3.6 Flash) tetap bekerja dengan akurasi 100% mutlak. Model AI murni bertindak sebagai penerjemah pedagogis (*Socratic Communicator*).
+2. **Kemandirian Terhadap Tingkat Model (Model Invariance):** Karena SymPy menangani perhitungan simbolik matematika (dalam ruang lingkup polinomial dan rasional univariat) serta penghitungan koordinat poligon, model AI ringan sekalipun tetap menghasilkan bimbingan yang konsisten secara matematis. Model AI bertindak sebagai penerjemah pedagogis (*Socratic Communicator*).
 
 ### Alur Kerja Mesin Verifikasi (CFL & Mesh Engine):
 1. Pengguna memasukkan formula atau deret langkah aljabar.
@@ -140,9 +140,9 @@ ZAP dirancang dengan spesifikasi antarmuka yang beradaptasi secara otomatis deng
 
 ---
 
-## 5. ZERO-FRICTION 1-CLICK AUTHENTICATION ARCHITECTURE
+## 5. AUTENTIKASI 1-KLIK, SESI 30 HARI & PRA-PROSES LAMPIRAN SISI KLIEN
 
-ZAP memecahkan masalah pembiayaan token AI terpusat dengan mengadopsi model **Delegated Client-Side Authentication**:
-1. **Google OAuth 2.0 (Default):** Siswa dan guru masuk dengan 1-klik akun Google mereka. Sistem mengautentikasi akses ke Google Gemini API secara langsung tanpa mengharuskan pengguna menyalin atau memahami konsep API key.
-2. **Universal ChatGPT Connect:** Pengguna yang memiliki akun OpenAI dapat menghubungkan akun mereka untuk mengakses model GPT-4o / o1 secara resmi tanpa ada penurunan (*downgrade*) kemampuan penalaran.
-3. **Privasi & Keamanan Klien:** Token otorisasi disimpan secara lokal pada `localStorage` peramban web dan tidak pernah disimpan secara permanen di basis data server ZAP.
+ZAP menjaga stabilitas sesi pengguna maupun keandalan unggahan dokumen di berbagai konfigurasi jaringan:
+1. **Google OAuth 2.0 + Sesi Server 30 Hari:** Siswa dan guru masuk 1-klik dengan akun Google; `/api/auth/google` memverifikasi ID token ke Google lalu menerbitkan token sesi HMAC 30 hari (`ZAP_SESSION_SECRET`) agar sinkronisasi vault tetap berlanjut meski token JWT Google kedaluwarsa setelah 1 jam.
+2. **Pre-Upload Client Compression & Extraction (`upload-compress.ts`):** Foto dikompresi progresif (`<= 280 KB`), PDF besar & berkas Office (`.pptx`/`.docx`/`.xlsx`) diekstrak teksnya langsung di peramban sementara PDF tetap memiliki `blob:`/`data:` URL untuk pratinjau lokal, dan budget payload JSON `/api/chat`, `/api/chat/share`, maupun `/api/user/sync` dijaga aman di bawah 780 KB.
+3. **Privasi & Keamanan Kunci:** Token sesi dan kunci vault disimpan di sisi pengguna sesuai kebijakan zero-knowledge (`vault-crypto.ts`), dan kunci API provider tidak pernah dikirim ke server sinkronisasi dalam bentuk plaintext.

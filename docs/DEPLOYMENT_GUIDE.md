@@ -6,36 +6,35 @@ Dokumen ini menjelaskan tata cara deployment ZAP (Zero Answer Policy) ke domain 
 
 ## 1. Arsitektur Deployment & Alokasi Database
 
-### A. Database yang Dipakai Kode Saat Ini: SQLite
+### A. Penyimpanan yang Dipakai Kode: SQLite Backend + PostgreSQL Opsional Frontend
 
-Sesuai kode yang berjalan hari ini, **seluruh data ZAP disimpan di SQLite**. Tidak ada kode backend yang membaca `DATABASE_URL` atau terhubung ke PostgreSQL.
-
-Di aplikasi ZAP, terdapat **2 jenis data** dengan karakteristik yang berbeda:
+Di aplikasi ZAP, terdapat **3 jalur persistensi** sesuai karakteristik beban kerjanya:
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────────┐
-│                             ZAP DATA ARCHITECTURE                                │
-├────────────────────────────────────────┬─────────────────────────────────────────┤
-│ 1. Math Corpus & Knowledge Base        │ 2. User Accounts, Chats & Sync          │
-│    (Soal Kurikulum, Teorema, Geometri) │    (Akun Google, Riwayat Sesi, BYOK)    │
-├────────────────────────────────────────┼─────────────────────────────────────────┤
-│ • Disimpan di: SQLite (data/*.db)      │ • Disimpan di: SQLite (zapcore Store)   │
-│ • Sifat: Read-Heavy, Embedded di CAS   │ • Sifat: Berkas lokal per deployment    │
-│ • Latensi: < 1 ms (tanpa round-trip)   │ • Enkripsi kunci: AES-256-GCM (vault)   │
-└────────────────────────────────────────┴─────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│                                 ZAP DATA ARCHITECTURE                                    │
+├────────────────────────────────────────┬─────────────────────────────────────────────────┤
+│ 1. Math Corpus & Backend Platform      │ 2. Frontend KV Store (Users, Shares, Vault)     │
+│    (Soal Kurikulum, Teorema, Geometri) │    (Sync Enkripsi, Share Links, Security Log)   │
+├────────────────────────────────────────┼─────────────────────────────────────────────────┤
+│ • Backend: SQLite (data/*.db &         │ • Opsional: PostgreSQL (`DATABASE_URL`) via     │
+│   zap_platform.db)                     │   `frontend/lib/kv-store.ts` (`zap_kv_store`)   │
+│ • Latensi lokal: < 1 ms di CAS         │ • Fallback otomatis: `.zap_vault` -> `/tmp` ->  │
+│                                        │   memori proses                                 │
+└────────────────────────────────────────┴─────────────────────────────────────────────────┘
 ```
 
 1. **Math Knowledge Base (`data/zap_math_corpus.db`):**
-   - Tetap berada di **SQLite lokal** di dalam container/folder backend.
-   - **Alasannya:** Mesin deterministik SymPy membaca ratusan baris aljabar per detik. Dengan SQLite lokal di container backend, pembacaan data terjadi instan (**< 1 milidetik**) tanpa latency jaringan keluar server.
+   - Tetap berada di **SQLite lokal** di dalam container/folder backend agar mesin deterministik SymPy membaca korpus tanpa latency jaringan keluar server.
+2. **Backend Platform (`zapcore`):**
+   - Menggunakan **SQLite** lewat `zapcore/store.py` (lokasi dari `ZAP_DB_PATH`, bawaan `zap_platform.db`) bila service opsional `platform_main.py` dijalankan.
+3. **Frontend Persistence & Vault (`frontend/lib/kv-store.ts`):**
+   - Route Next.js (`/api/user/sync`, `/api/chat/share`, `/api/auth/credentials`, `/api/waitlist`, dan `security-vault`) mendukung **PostgreSQL opsional** melalui `DATABASE_URL` (otomatis membuat tabel `zap_kv_store` saat koneksi pertama).
+   - Jika `DATABASE_URL` kosong atau database tidak terjangkau, sistem otomatis fallback ke direktori `.zap_vault` (dengan izin `nextjs:nodejs` di Docker), `/tmp/zap_vault`, atau memori proses.
 
-2. **User Data, Sesi Percakapan & Kredensial Terenkripsi (`zapcore`):**
-   - Menggunakan **SQLite** lewat `zapcore/store.py` (lokasi dari `ZAP_DB_PATH`, bawaan `zap_platform.db`).
-   - Menangani tabel `users`, `sessions`, `connectors` (kunci API AI terenkripsi AES-256-GCM oleh vault), dan `conversations`.
+### B. Bagaimana dengan PostgreSQL di `docker-compose.yml`?
 
-### B. Bagaimana dengan PostgreSQL di docker-compose.yml?
-
-Service `postgres` di `docker-compose.yml` **bersifat opsional dan saat ini tidak dipakai oleh kode mana pun**. Service itu disiapkan untuk kebutuhan masa depan dan **tidak menerbitkan port ke host** (hanya dapat dijangkau dari jaringan internal compose). Bila Anda mengaktifkannya, `POSTGRES_PASSWORD` wajib diisi lewat `.env` (compose akan menolak berjalan bila kosong). Migrasi data pengguna ke PostgreSQL memerlukan perubahan kode di `zapcore/store.py` terlebih dahulu; jangan mengandalkan `DATABASE_URL` karena variabel itu tidak dibaca kode saat ini.
+Service `postgres` di `docker-compose.yml` bersifat opsional (profile/service terpisah). Bila diaktifkan, isi `POSTGRES_PASSWORD` di `.env` serta set `DATABASE_URL` pada environment frontend agar data sinkronisasi akun, share link, dan kredensial bertahan lintas restart container.
 
 ### C. Layanan Platform (`platform_main.py`) Tidak Dijalankan Compose Secara Bawaan
 
@@ -112,6 +111,9 @@ ZAP_JWT_SECRET=buat_kunci_rahasia_acak_panjang_disini
 ZAP_MASTER_SECRET=buat_passphrase_enkripsi_vault_disini
 ZAP_GOOGLE_CLIENT_ID=client_id_oauth_google_anda
 NEXT_PUBLIC_GOOGLE_CLIENT_ID=client_id_oauth_google_anda
+ZAP_SESSION_SECRET=buat_session_secret_hmac_32_byte_disini
+# Opsional: aktifkan PostgreSQL KV store untuk sinkronisasi, share link & security log frontend
+# DATABASE_URL=postgres://zap:password_anda@postgres:5432/zap
 # Hanya bila service postgres opsional diaktifkan:
 POSTGRES_PASSWORD=buat_password_postgres_acak_disini
 ```
@@ -152,6 +154,8 @@ server {
 # 2. Frontend Web (Jika di-host di VPS yang sama pada port 3000)
 server {
     server_name chatzap.web.id www.chatzap.web.id;
+    # Disarankan >= 20m untuk lampiran PDF/media (frontend juga sudah mengompresi payload <= 780 KB)
+    client_max_body_size 20m;
 
     location / {
         proxy_pass http://127.0.0.1:3000;
