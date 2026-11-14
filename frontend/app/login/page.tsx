@@ -154,15 +154,15 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="relative flex h-[100dvh] flex-col overflow-hidden bg-[#fbf7f0] dark:bg-[#0d0907] text-slate-900 dark:text-zinc-100 font-sans selection:bg-[#d9772f]/20 selection:text-[#1c120c] dark:selection:text-[#f5e9dc]">
+    <div className="relative flex min-h-[100dvh] flex-col overflow-x-hidden overflow-y-auto bg-[#fbf7f0] dark:bg-[#0d0907] text-slate-900 dark:text-zinc-100 font-sans selection:bg-[#d9772f]/20 selection:text-[#1c120c] dark:selection:text-[#f5e9dc]">
       {/* Ambient surface: static and cheap, no continuous animation */}
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(rgba(28,18,12,0.055)_0.7px,transparent_0.8px)] [background-size:24px_24px] dark:bg-[radial-gradient(rgba(255,247,236,0.06)_0.7px,transparent_0.8px)]" />
       <div className="pointer-events-none fixed left-1/2 top-0 h-[420px] w-[720px] -translate-x-1/2 -translate-y-1/3 rounded-full bg-[radial-gradient(circle,rgba(240,122,30,0.14),transparent_68%)] blur-3xl dark:bg-[radial-gradient(circle,rgba(240,122,30,0.10),transparent_68%)]" />
 
       <SiteHeader />
 
-      <main className="relative z-10 flex min-h-0 flex-1 items-center justify-center px-4 pb-5 pt-20 sm:pt-24">
-        <div className="flex max-h-full w-full max-w-[410px] flex-col overflow-y-auto overscroll-contain rounded-[14px] border border-[#e6dacb] bg-[#fffdf8] p-5 shadow-[0_22px_60px_-32px_rgba(42,14,14,0.42)] [scrollbar-width:none] dark:border-[#2c2118] dark:bg-[#17110c] dark:shadow-[0_24px_60px_-28px_rgba(0,0,0,0.8)] [&::-webkit-scrollbar]:hidden sm:p-6">
+      <main className="relative z-10 flex flex-1 items-center justify-center px-4 pb-8 pt-20 sm:pt-24">
+        <div className="flex w-full max-w-[410px] flex-col rounded-[14px] border border-[#e6dacb] bg-[#fffdf8] p-5 shadow-[0_22px_60px_-32px_rgba(42,14,14,0.42)] dark:border-[#2c2118] dark:bg-[#17110c] dark:shadow-[0_24px_60px_-28px_rgba(0,0,0,0.8)] sm:p-6">
           {/* Brand Header */}
           <div className="text-center">
             <h1 className="text-[20px] font-bold tracking-[-0.03em] text-[#1c120c] dark:text-[#f5e9dc] sm:text-[22px]">

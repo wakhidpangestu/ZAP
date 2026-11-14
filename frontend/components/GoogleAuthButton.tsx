@@ -282,7 +282,7 @@ export default function GoogleAuthButton({
       if (idleHandle.id) clearTimeout(idleHandle.id);
       interactionEvents.forEach((ev) => document.removeEventListener(ev, kickOff));
     };
-  }, [user, handleGoogleCredentialResponse]);
+  }, [user, handleGoogleCredentialResponse, renderGoogleButton]);
 
   // Close dropdown saat klik di luar
   useEffect(() => {

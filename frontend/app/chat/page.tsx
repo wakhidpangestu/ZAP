@@ -94,6 +94,7 @@ import {
   fitChatPayloadToBudget,
   preparePdfForChat,
 } from "@/utils/upload-compress";
+import { CHAT_STARTER_TEMPLATES, type StarterIconKey } from "@/lib/chat-starters";
 import {
   Plus,
   PlusCircle,
@@ -2023,8 +2024,30 @@ export default function ZAPApp() {
     activateConversation(target);
   }, [activateConversation, conversations]);
 
+  const initHelpersRef = useRef({
+    activateConversation,
+    getPathConversationId,
+    notify,
+    startNewChat,
+    updateUrlForConversation,
+  });
+  initHelpersRef.current = {
+    activateConversation,
+    getPathConversationId,
+    notify,
+    startNewChat,
+    updateUrlForConversation,
+  };
+
   // 1. Cek autentikasi dari localStorage saat mount
   useEffect(() => {
+    const {
+      activateConversation: activateConv,
+      getPathConversationId: getPathConvId,
+      notify: showNotify,
+      startNewChat: startFreshChat,
+      updateUrlForConversation: syncConvUrl,
+    } = initHelpersRef.current;
     if (typeof window !== "undefined") {
       try {
         // Cek jika terdapat parameter pemulihan di URL (?unban_token=... atau ?unban=... atau ?token=...)
@@ -2046,11 +2069,11 @@ export default function ZAPApp() {
                 setJailbreakStrikes(0);
                 localStorage.removeItem("zap_account_suspended");
                 localStorage.removeItem("zap_jailbreak_strikes");
-                notify(data.message || "Akun Anda berhasil dipulihkan secara penuh! Selamat datang kembali di ChatZAP.", "info");
+                showNotify(data.message || "Akun Anda berhasil dipulihkan secara penuh! Selamat datang kembali di ChatZAP.", "info");
                 const cleanPath = window.location.pathname;
                 window.history.replaceState({}, "", cleanPath);
               } else {
-                notify(data.message || data.error || "Kode pemulihan tidak valid atau sudah kedaluwarsa.", "error");
+                showNotify(data.message || data.error || "Kode pemulihan tidak valid atau sudah kedaluwarsa.", "error");
               }
             })
             .catch((e) => console.warn("Unban token check failed:", e));
@@ -2073,7 +2096,7 @@ export default function ZAPApp() {
             const userKey = (parsed.email || parsed.id || "").toLowerCase().trim();
             const lastActiveUser = localStorage.getItem("zap_last_active_user_email")?.toLowerCase().trim();
             const isAccountSwitched = !lastActiveUser || lastActiveUser !== userKey;
-            const initialTargetId = getPathConversationId();
+            const initialTargetId = getPathConvId();
 
             // Sinkronisasi status penangguhan / unban dengan database server vault.
             // Rute ini butuh admin secret (atau token pemulihan) — tanpa itu
@@ -2110,7 +2133,7 @@ export default function ZAPApp() {
               setConversations([]);
               conversationsRef.current = [];
               setMessages([]);
-              startNewChat();
+              startFreshChat();
               try {
                 localStorage.removeItem("zap_conversations");
                 localStorage.removeItem("zap_conversations_v1");
@@ -2126,7 +2149,7 @@ export default function ZAPApp() {
                 if (initialTargetId && initialTargetId.toLowerCase() !== "new") {
                   const initialMatch = userStored.find((c) => c.id === initialTargetId);
                   if (initialMatch) {
-                    activateConversation(initialMatch);
+                    activateConv(initialMatch);
                   }
                 }
               } else {
@@ -2188,13 +2211,13 @@ export default function ZAPApp() {
                         saveConversations(updated, userKey);
                         return updated;
                       });
-                      activateConversation(importedConv);
+                      activateConv(importedConv);
                     } else if (userConvs.length === 0 && messagesRef.current.length === 0) {
-                      startNewChat();
+                      startFreshChat();
                     }
                   })
                   .catch(() => {
-                    if (userConvs.length === 0 && messagesRef.current.length === 0) startNewChat();
+                    if (userConvs.length === 0 && messagesRef.current.length === 0) startFreshChat();
                   });
               } else if (initialTargetId && initialTargetId.toLowerCase() !== "new") {
                 // HANYA pulihkan jika URL saat halaman pertama kali dibuka secara eksplisit menunjuk ke percakapan tertentu
@@ -2210,20 +2233,20 @@ export default function ZAPApp() {
                   const currentMemoryCount = messagesRef.current.length;
                   const foundCount = found.messages?.length || 0;
                   if (!userMovedOn && (currentMemoryCount === 0 || foundCount > currentMemoryCount)) {
-                    activateConversation(found);
+                    activateConv(found);
                   }
                 } else if (!userMovedOn && messagesRef.current.length === 0) {
                   // Proteksi IDOR: Sesi percakapan privat akun lain tidak boleh dimuat!
-                  updateUrlForConversation(null);
-                  startNewChat();
-                  notify(
+                  syncConvUrl(null);
+                  startFreshChat();
+                  showNotify(
                     "Akses Ditolak: Anda tidak memiliki izin untuk melihat sesi percakapan privat akun lain. Percakapan hanya dapat diakses jika pemilik telah mengaktifkan Tautan Publik (Public Share).",
                     "error"
                   );
                 }
               } else if (userConvs.length === 0 && messagesRef.current.length === 0 && pendingConvIdRef.current === null) {
                 // Sesi awal baru: hanya buat chat baru jika belum ada pesan aktif yang diketik pengguna
-                startNewChat();
+                startFreshChat();
               }
 
               if (restored.workspaces && restored.workspaces.length > 0) {
@@ -2357,10 +2380,10 @@ export default function ZAPApp() {
     if (!memoryReady || messages.length === 0 || !currentUser) return;
     const firstUserMsg = messages.find((m) => m.sender === "user");
     const title = firstUserMsg
-      ? firstUserMsg.steps?.[0] || firstUserMsg.rawText?.slice(0, 24) || "New Session"
-      : "New Session";
+      ? firstUserMsg.steps?.[0] || firstUserMsg.rawText?.slice(0, 24) || "Sesi Baru"
+      : "Sesi Baru";
 
-    const list = conversationsRef.current.length > 0 ? conversationsRef.current : conversations;
+    const list = conversationsRef.current;
     const existing = list.find((c) => c.id === activeConversationId);
 
     // Tentukan apakah ada pesan baru yang dikirim atau diterima
@@ -4177,7 +4200,7 @@ export default function ZAPApp() {
           </button>
         </div>
 
-        {/* Action Button: + New Session */}
+        {/* Action Button: + Sesi Baru */}
         <div className="px-3 py-2.5">
           <button
             type="button"
@@ -4185,12 +4208,12 @@ export default function ZAPApp() {
             className="w-full py-2.5 px-3 rounded-xl bg-[#faf9f6] dark:bg-[#1e2025] hover:bg-[#f5f3ef] dark:hover:bg-[#272a32] text-[#09090b] dark:text-zinc-200 font-semibold text-[13px] flex items-center justify-center gap-2 transition border border-zinc-200/90 dark:border-white/[0.04] shadow-sm active:scale-[0.99] cursor-pointer"
           >
             <PlusCircle className="w-4 h-4 text-[#8f5e32] dark:text-[#d4a574]" />
-            <span>New Session</span>
+            <span>Sesi Baru</span>
           </button>
         </div>
 
-        {/* Navigation Items: Plugins dan Automation tasks dipindah ke modal More
-            (audit fitur 12 Nov 2026) agar menu utama fokus ke alur belajar. */}
+        {/* Menu tambahan (konektor dan otomasi) dipindah ke modal Lainnya
+            agar menu utama fokus ke alur belajar. */}
         <div className="px-3 space-y-0.5">
           <button
             type="button"
@@ -4198,7 +4221,7 @@ export default function ZAPApp() {
             className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[13.5px] font-medium text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-[#f3efe7] dark:hover:bg-white/[0.05] transition text-left cursor-pointer"
           >
             <LayoutGrid className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
-            <span>More</span>
+            <span>Lainnya</span>
           </button>
         </div>
 
@@ -4362,7 +4385,7 @@ export default function ZAPApp() {
                     : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-[#f3efe7] dark:hover:bg-white/[0.04]"
                 }`}
               >
-                <span className="truncate">New Session</span>
+                <span className="truncate">Sesi Baru</span>
               </div>
             )}
 
@@ -4975,12 +4998,12 @@ export default function ZAPApp() {
                     <Atom className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" />
                     <span className="whitespace-nowrap max-w-[96px] min-[380px]:max-w-[118px] min-[420px]:max-w-none truncate">
                       {interactionMode === "standard"
-                        ? "Standard mode"
+                        ? "Mode Standar"
                         : interactionMode === "strict"
                         ? "Strict Zero-Answer"
                         : interactionMode === "visual"
-                        ? "Visual 3D & Canvas"
-                        : "CAS Diagnostic"}
+                        ? "Visual 3D & Kanvas"
+                        : "Diagnostik CAS"}
                     </span>
                     <ChevronDown className="w-3 h-3 text-zinc-400 dark:text-zinc-400" />
                   </button>
@@ -4995,7 +5018,7 @@ export default function ZAPApp() {
                         {[
                           {
                             id: "standard" as const,
-                            label: "Standard Mode",
+                            label: "Mode Standar",
                             desc: "Bimbingan Sokratik seimbang dengan penalaran aljabar",
                           },
                           {
@@ -5005,12 +5028,12 @@ export default function ZAPApp() {
                           },
                           {
                             id: "visual" as const,
-                            label: "Visual 3D & Canvas",
+                            label: "Visual 3D & Kanvas",
                             desc: "Prioritaskan visualisasi spasial, bangun ruang, & geometri",
                           },
                           {
                             id: "cas" as const,
-                            label: "CAS Diagnostic",
+                            label: "Diagnostik CAS",
                             desc: "Verifikasi aljabar deterministik SymPy murni",
                           },
                         ].map((m) => (
@@ -5331,34 +5354,26 @@ export default function ZAPApp() {
               {/* Pemantik pertama: tiga jalur nyata 1-klik (SymPy ROOT_LOSS, gelombang 2D, permukaan 3D)
                   yang langsung menampilkan keunggulan ZAP tanpa error. */}
               <div className="w-full max-w-3xl lg:max-w-4xl mt-3 flex flex-wrap items-center justify-start gap-2 px-1">
-                {[
-                  {
-                    label: "Misteri Akar Hilang: x² = 5x",
-                    icon: FlaskConical,
-                    text: "Tolong cek langkah saya: x^2 = 5x -> kedua ruas dibagi x -> x = 5",
-                  },
-                  {
-                    label: "Gelombang Sinus y = 2 sin(x)",
-                    icon: Compass,
-                    text: "Tampilkan grafik gelombang sinus y = 2 sin(x) di papan tulis 2D",
-                  },
-                  {
-                    label: "Pelana Kuda 3D (z = x² − y²)",
-                    icon: Box,
-                    text: "Tampilkan permukaan pelana kuda 3D z = x^2 - y^2",
-                  },
-                ].map((item) => (
-                  <button
-                    key={item.label}
-                    type="button"
-                    disabled={loading || isAccountSuspended}
-                    onClick={() => applyStarterPrompt(item.text)}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full border border-zinc-200 dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.04] text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:border-[#d9c3a6] hover:bg-[#faf4ed] dark:hover:bg-white/[0.07] dark:hover:border-white/[0.18] transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <item.icon className="w-3.5 h-3.5 text-[#8f5e32] dark:text-[#d4a574]" />
-                    <span>{item.label}</span>
-                  </button>
-                ))}
+                {CHAT_STARTER_TEMPLATES.map((item) => {
+                  const iconMap: Record<StarterIconKey, React.ComponentType<{ className?: string }>> = {
+                    flask: FlaskConical,
+                    compass: Compass,
+                    box: Box,
+                  };
+                  const ItemIcon = iconMap[item.icon];
+                  return (
+                    <button
+                      key={item.label}
+                      type="button"
+                      disabled={loading || isAccountSuspended}
+                      onClick={() => applyStarterPrompt(item.text)}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full border border-zinc-200 dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.04] text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:border-[#d9c3a6] hover:bg-[#faf4ed] dark:hover:bg-white/[0.07] dark:hover:border-white/[0.18] transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <ItemIcon className="w-3.5 h-3.5 text-[#8f5e32] dark:text-[#d4a574]" />
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -6184,7 +6199,7 @@ export default function ZAPApp() {
               <Compass className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" />
               <span>
                 {rightPaneTab === "start"
-                  ? "Start"
+                  ? "Menu Awal"
                   : rightPaneTab === "files"
                   ? "Lampiran Sesi"
                   : "Papan Tulis Pintar"}
@@ -6195,7 +6210,7 @@ export default function ZAPApp() {
                   onClick={() => setRightPaneTab("start")}
                   className="ml-2 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white underline cursor-pointer font-medium"
                 >
-                  Kembali ke Start
+                  Menu Awal
                 </button>
               )}
             </div>
@@ -6291,7 +6306,7 @@ export default function ZAPApp() {
                       </div>
                       <div>
                         <div className="font-medium text-xs text-zinc-800 dark:text-zinc-200 group-hover:text-zinc-900 dark:group-hover:text-white">
-                          More tools
+                          Alat Lainnya
                         </div>
                         <div className="text-xs text-zinc-500 dark:text-zinc-400">
                           Modul kalkulus dan konektor

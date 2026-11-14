@@ -5,26 +5,11 @@ import { cleanModelResponse, finalizeModelReply, sanitizeZeroAnswer } from "@/li
 import { rateLimitByIp } from "@/utils/rate-limit";
 import { verifyBearerIdentity } from "@/lib/account-session";
 import { extractPdfTextFromDataUrl } from "@/lib/pdf-extract";
-
-interface ActiveProblemContext {
-  steps?: string[];
-  faultLine?: number;
-  misconceptionType?: string;
-  explanation?: string;
-  socraticHint?: string;
-  harnessMemoryContext?: string;
-  workspaceMode?: "write" | "read";
-  interactionMode?: "standard" | "strict" | "visual" | "cas";
-  reasoningEffort?: "low" | "medium" | "high";
-  autoLatexEnabled?: boolean;
-  counterExample?: {
-    test_variable?: string;
-    test_value?: number;
-    lhs_expected?: string;
-    rhs_calculated?: string;
-    contradiction_statement?: string;
-  };
-}
+import {
+  type ActiveProblemContext,
+  diagnoseMessageWithSymPy,
+  formatDeterministicSymPyReply,
+} from "@/lib/sympy-diagnose";
 
 const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
 
@@ -856,8 +841,15 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
       }
     }
 
-    // 0c. ZAP MODEL AGENT HARNESS: Ambil Memori Episodik & Rekam Pembelajaran Kontinu dari Percakapan
-    const harnessResult = await fetchHarnessMemoryContext(rawMessage, identityKey || undefined);
+    // 0c. ZAP MODEL AGENT HARNESS + SYMPY CFL:
+    // Jalankan secara paralel: ambil memori episodik & verifikasi langkah aljabar via SymPy CAS
+    const shouldRunSymPyPrecheck = !(rawActiveProblem?.steps && rawActiveProblem.steps.length > 0);
+    const [harnessResult, sympyBridge] = await Promise.all([
+      fetchHarnessMemoryContext(rawMessage, identityKey || undefined),
+      shouldRunSymPyPrecheck
+        ? diagnoseMessageWithSymPy(rawMessage, targetVariable, API_BASE)
+        : Promise.resolve(null),
+    ]);
     const harnessMemoryContext = harnessResult.promptInjection;
     if (harnessResult.corpusReferences.length > 0) {
       corpusRefsByRequest.set(req, harnessResult.corpusReferences);
@@ -877,16 +869,20 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
     const activeProblem: ActiveProblemContext | null | undefined = rawActiveProblem
       ? {
           ...rawActiveProblem,
+          ...(sympyBridge && !(rawActiveProblem.steps && rawActiveProblem.steps.length > 0)
+            ? sympyBridge.activeProblemPatch
+            : {}),
           ...harnessUiDirectives,
           harnessMemoryContext: harnessMemoryContext || undefined,
         }
       : {
+          ...(sympyBridge ? sympyBridge.activeProblemPatch : {}),
           ...harnessUiDirectives,
           ...(harnessMemoryContext ? { harnessMemoryContext } : {}),
         };
     const previousAssistantTurn =
       conversationHistory?.slice().reverse().find((t) => t.role === "assistant")?.content || "";
-    recordTurnToAgentHarness(rawMessage, previousAssistantTurn, rawActiveProblem, identityKey || undefined);
+    recordTurnToAgentHarness(rawMessage, previousAssistantTurn, activeProblem, identityKey || undefined);
 
     let message = rawMessage;
     const textAttachments: Array<{ name: string; content: string }> = [];
@@ -1717,12 +1713,24 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
       }
     }
 
-    // 2. Jika pengguna memilih mesin SymPy lokal, langsung gunakan respons instan (0 ms latency)
+    // 2. Jika pengguna memilih mesin SymPy lokal/CAS, utamakan hasil verifikasi SymPy Python
+    // (/api/v1/diagnose), dengan fallback deterministik lokal bila backend offline.
     if (modelId === "sympy-cfl" || modelId === "sympy-cas-deterministic") {
+      if (sympyBridge) {
+        return NextResponse.json({
+          reply: finalizeModelReply(
+            formatDeterministicSymPyReply(sympyBridge),
+            generateSocraticFallbackResponse(message, activeProblem),
+            { targetVariable }
+          ),
+          model: "SymPy CFL Engine (Deterministic CAS)",
+          source: "sympy-cas-backend",
+        });
+      }
       const socraticReply = generateSocraticFallbackResponse(message, activeProblem);
       return NextResponse.json({
         reply: socraticReply,
-        model: "SymPy CFL Engine (Local Deterministic 0ms)",
+        model: "SymPy CFL Engine (Local Fallback)",
         source: "local-sympy",
       });
     }
