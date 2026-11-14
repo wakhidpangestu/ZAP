@@ -146,7 +146,9 @@ export function RibbonGradient({ className = "" }: { className?: string }) {
       }
 
       ctx.putImageData(image, 0, 0);
-      if (!reduceMotion) raf = requestAnimationFrame(paint);
+      // Lukis frame awal kaya tekstur & LUT secara statis tanpa loop CPU 24fps
+      // yang membebani thread utama hingga jutaan operasi per detik.
+      running = false;
     };
 
     const startLoop = () => {

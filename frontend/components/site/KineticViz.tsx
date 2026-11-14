@@ -14,8 +14,8 @@
  * Semua menghormati prefers-reduced-motion (berhenti di frame akhir).
  */
 
-import React from "react";
-import { motion, useReducedMotion } from "framer-motion";
+import React, { useRef } from "react";
+import { motion, useReducedMotion, useInView } from "framer-motion";
 
 type VizProps = { className?: string };
 
@@ -47,13 +47,15 @@ function mathPoint(t: number) {
 }
 
 export function MathViz({ className = "" }: VizProps) {
-  const reduce = useReducedMotion();
+  const ref = useRef<SVGSVGElement | null>(null);
+  const inView = useInView(ref, { margin: "80px" });
+  const reduce = useReducedMotion() || !inView;
   const trace = [0.08, 0.32, 0.5, 0.68, 0.92].map(mathPoint);
   const rootA = mathPoint(0.2005);
   const rootB = mathPoint(0.7995);
 
   return (
-    <svg viewBox="0 0 240 110" className={className} fill="none" aria-hidden="true">
+    <svg ref={ref} viewBox="0 0 240 110" className={className} fill="none" aria-hidden="true">
       {/* kertas grafik */}
       {[26, 60, 94].map((y) => (
         <line key={`h${y}`} x1="18" y1={y} x2="222" y2={y} stroke={LINE} strokeOpacity="0.28" strokeDasharray="2 5" />
@@ -154,10 +156,12 @@ const AST_EDGES: [number, number][] = [
 ];
 
 export function CodeViz({ className = "" }: VizProps) {
-  const reduce = useReducedMotion();
+  const ref = useRef<SVGSVGElement | null>(null);
+  const inView = useInView(ref, { margin: "80px" });
+  const reduce = useReducedMotion() || !inView;
 
   return (
-    <svg viewBox="0 0 240 110" className={className} fill="none" aria-hidden="true">
+    <svg ref={ref} viewBox="0 0 240 110" className={className} fill="none" aria-hidden="true">
       {/* baris kode */}
       {[
         { y: 10, tokens: [18, 10, 34] },
@@ -288,12 +292,14 @@ function physPoint(t: number) {
 }
 
 export function PhysicsViz({ className = "" }: VizProps) {
-  const reduce = useReducedMotion();
+  const ref = useRef<SVGSVGElement | null>(null);
+  const inView = useInView(ref, { margin: "80px" });
+  const reduce = useReducedMotion() || !inView;
   const flight = [0.06, 0.28, 0.5, 0.72, 0.94].map(physPoint);
   const apex = physPoint(0.5);
 
   return (
-    <svg viewBox="0 0 240 110" className={className} fill="none" aria-hidden="true">
+    <svg ref={ref} viewBox="0 0 240 110" className={className} fill="none" aria-hidden="true">
       {/* lantai + grid metrik */}
       <line x1="14" y1="94" x2="226" y2="94" stroke={LINE} strokeOpacity="0.9" />
       {[22, 62, 102, 142, 182, 222].map((x) => (
@@ -368,14 +374,16 @@ export function PhysicsViz({ className = "" }: VizProps) {
 /* ------------------------------------------------------------------ */
 
 export function ChemistryViz({ className = "" }: VizProps) {
-  const reduce = useReducedMotion();
+  const ref = useRef<SVGSVGElement | null>(null);
+  const inView = useInView(ref, { margin: "80px" });
+  const reduce = useReducedMotion() || !inView;
   const atoms = Array.from({ length: 6 }, (_, i) => {
     const angle = (Math.PI * 2 * i) / 6 - Math.PI / 2;
     return { x: 92 + Math.cos(angle) * 30, y: 56 + Math.sin(angle) * 20, angle };
   });
 
   return (
-    <svg viewBox="0 0 240 110" className={className} fill="none" aria-hidden="true">
+    <svg ref={ref} viewBox="0 0 240 110" className={className} fill="none" aria-hidden="true">
       <text x="16" y="16" fontSize="8" fill={TEXT} fillOpacity="0.55" fontFamily={mono}>
         C₆H₆ · 78,11 g/mol
       </text>
@@ -527,7 +535,9 @@ export function RouterViz({ className = "" }: VizProps) {
 /* ------------------------------------------------------------------ */
 
 export function StepCheckViz({ className = "" }: VizProps) {
-  const reduce = useReducedMotion();
+  const ref = useRef<SVGSVGElement | null>(null);
+  const inView = useInView(ref, { margin: "80px" });
+  const reduce = useReducedMotion() || !inView;
   const rows = [
     { y: 12, width: 52, ok: true },
     { y: 25, width: 44, ok: false },
@@ -535,7 +545,7 @@ export function StepCheckViz({ className = "" }: VizProps) {
   ];
 
   return (
-    <svg viewBox="0 0 88 52" className={className} fill="none" aria-hidden="true">
+    <svg ref={ref} viewBox="0 0 88 52" className={className} fill="none" aria-hidden="true">
       {rows.map((row, i) => (
         <g key={row.y}>
           <rect x="4" y={row.y} width={row.width} height="5" rx="2.5" fill={row.ok ? AMBER : ERROR} fillOpacity="0.55" />
