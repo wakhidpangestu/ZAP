@@ -39,7 +39,7 @@ const ModelShowcase = dynamic(
 
 const VaultStage = dynamic(
   () => import("@/components/landing/VaultStage").then((m) => m.VaultStage),
-  { ssr: false }
+  { ssr: true }
 );
 
 const FaqSection = dynamic(

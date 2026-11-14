@@ -298,11 +298,21 @@ function ChatBody() {
 function CanvasPlaceholder({ onActivate }: { onActivate?: () => void }) {
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label="Aktifkan dan putar model 3D Smartboard"
       onClick={onActivate}
-      className="group relative flex h-full w-full flex-col items-center justify-center overflow-hidden bg-slate-50 p-6 text-zinc-500 transition-colors cursor-pointer select-none dark:bg-[#080a0f] dark:text-zinc-400"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onActivate?.();
+        }
+      }}
+      className="group relative flex h-full w-full flex-col items-center justify-center overflow-hidden bg-slate-50 p-6 text-zinc-500 transition-colors cursor-pointer select-none dark:bg-[#080a0f] dark:text-zinc-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
     >
       {/* Background isometric grid lines */}
       <svg
+        aria-hidden="true"
         className="pointer-events-none absolute inset-0 h-full w-full opacity-40 dark:opacity-20"
         xmlns="http://www.w3.org/2000/svg"
       >
@@ -317,6 +327,7 @@ function CanvasPlaceholder({ onActivate }: { onActivate?: () => void }) {
       {/* Isometric 3D Cube Preview (Identik dengan solid cube r=6cm Smartboard) */}
       <div className="relative z-10 transition-transform duration-500 group-hover:scale-105">
         <svg
+          aria-hidden="true"
           viewBox="0 0 280 240"
           className="h-44 w-52 drop-shadow-[0_12px_24px_rgba(0,0,0,0.1)] dark:drop-shadow-[0_16px_32px_rgba(0,0,0,0.4)]"
           fill="none"
@@ -483,7 +494,6 @@ function SmartboardPanel() {
     const node = ref.current;
     if (!node) return;
     if (typeof IntersectionObserver === "undefined") {
-      setMounted(true);
       setInView(true);
       return;
     }
@@ -491,18 +501,6 @@ function SmartboardPanel() {
       (entries) => {
         const visible = entries.some((entry) => entry.isIntersecting);
         setInView(visible);
-        if (visible) {
-          // Defer Three.js mounting to idle time so it doesn't block initial page load / TBT
-          if (typeof window !== "undefined") {
-            const win = window as unknown as {
-              requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
-            };
-            const idleFn =
-              win.requestIdleCallback ||
-              ((cb: () => void) => window.setTimeout(cb, 3200));
-            idleFn(() => setMounted(true), { timeout: 4000 });
-          }
-        }
       },
       { rootMargin: "240px 0px" }
     );
