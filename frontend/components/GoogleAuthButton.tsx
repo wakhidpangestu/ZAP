@@ -176,6 +176,21 @@ export default function GoogleAuthButton({
     }
   }, []);
 
+  // Helper render tombol resmi Google yang otomatis menyesuaikan tema (dark/light)
+  const renderGoogleButton = useCallback((container: HTMLElement) => {
+    if (typeof window === "undefined" || !window.google?.accounts?.id) return;
+    const isDark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
+    container.innerHTML = "";
+    window.google.accounts.id.renderButton(container, {
+      theme: isDark ? "filled_black" : "outline",
+      size: "large",
+      shape: "pill",
+      text: "signin_with",
+      logo_alignment: "left",
+      width: 320,
+    });
+  }, []);
+
   // 2. Setup Google Identity Services (GSI) jika client ID tersedia di environment
   useEffect(() => {
     const envClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
@@ -218,15 +233,7 @@ export default function GoogleAuthButton({
           });
 
           if (gsiNativeBtnRef.current) {
-            gsiNativeBtnRef.current.innerHTML = "";
-            window.google.accounts.id.renderButton(gsiNativeBtnRef.current, {
-              theme: "outline",
-              size: "large",
-              shape: "pill",
-              text: "signin_with",
-              logo_alignment: "left",
-              width: 320,
-            });
+            renderGoogleButton(gsiNativeBtnRef.current);
             setIsGsiReady(true);
           }
         } catch (err) {
@@ -294,6 +301,33 @@ export default function GoogleAuthButton({
     });
   };
 
+  // Sinkronisasi tema Google Button saat pengguna mengganti mode dark/light
+  useEffect(() => {
+    if (!isGsiReady) return;
+    const reRenderTheme = () => {
+      if (gsiNativeBtnRef.current) {
+        renderGoogleButton(gsiNativeBtnRef.current);
+      }
+    };
+
+    window.addEventListener("zap_theme_change", reRenderTheme);
+    const observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === "attributes" && m.attributeName === "class") {
+          reRenderTheme();
+        }
+      }
+    });
+    if (typeof document !== "undefined") {
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    }
+
+    return () => {
+      window.removeEventListener("zap_theme_change", reRenderTheme);
+      observer.disconnect();
+    };
+  }, [isGsiReady, renderGoogleButton]);
+
   // Inisialisasi GSI + render tombol native (cermin logika efek pemuatan).
   const initAndRenderGsi = () => {
     const envClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
@@ -305,15 +339,7 @@ export default function GoogleAuthButton({
         auto_select: false,
       });
       if (gsiNativeBtnRef.current) {
-        gsiNativeBtnRef.current.innerHTML = "";
-        window.google.accounts.id.renderButton(gsiNativeBtnRef.current, {
-          theme: "outline",
-          size: "large",
-          shape: "pill",
-          text: "signin_with",
-          logo_alignment: "left",
-          width: 320,
-        });
+        renderGoogleButton(gsiNativeBtnRef.current);
         setIsGsiReady(true);
       }
     } catch (err) {
@@ -580,7 +606,7 @@ export default function GoogleAuthButton({
       */}
       <div
         ref={gsiNativeBtnRef}
-        className={isGsiReady ? "flex items-center justify-center w-full min-h-[44px]" : "hidden"}
+        className={isGsiReady ? "flex items-center justify-center w-full min-h-[44px] overflow-hidden rounded-full transition-colors duration-200" : "hidden"}
       />
 
       {/* 
@@ -593,7 +619,7 @@ export default function GoogleAuthButton({
           type="button"
           onClick={() => handleFastGoogleLogin()}
           disabled={gsiBusy}
-          className="w-full max-w-[320px] min-h-[40px] flex items-center justify-center gap-2.5 px-5 py-2.5 rounded-full bg-white hover:bg-slate-100 dark:bg-white dark:hover:bg-zinc-100 text-slate-900 font-medium text-xs transition shadow-sm active:scale-[0.98] cursor-pointer border border-slate-200 dark:border-zinc-200 select-none disabled:opacity-60 disabled:cursor-wait"
+          className="w-full max-w-[320px] min-h-[40px] flex items-center justify-center gap-2.5 px-5 py-2.5 rounded-full bg-white hover:bg-slate-100 dark:bg-[#131314] dark:hover:bg-[#1f1f20] text-slate-900 dark:text-white font-medium text-xs transition shadow-sm active:scale-[0.98] cursor-pointer border border-slate-200 dark:border-white/[0.15] select-none disabled:opacity-60 disabled:cursor-wait"
         >
           <GoogleLogo className="w-4 h-4 flex-shrink-0" />
           <span>{gsiBusy ? "Menghubungkan ke Google…" : "Login dengan Google"}</span>
