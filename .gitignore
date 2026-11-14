@@ -13,8 +13,11 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Python distribution lib (do not ignore frontend/lib)
+/lib/
+/lib64/
+!frontend/lib/
+!frontend/lib/**
 parts/
 sdist/
 var/
@@ -60,3 +63,4 @@ Surat_Pernyataan_Preview.png
 .codex/
 .agents/skills/impeccable/
 .agents/skills/ui-taste/
+.agents/skills/video-shotcraft/
