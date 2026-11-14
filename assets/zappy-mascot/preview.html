@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ZAPPY preview</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #E8E1D6; }
+  canvas { display: block; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="sheet"></canvas>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const qs = new URLSearchParams(location.search);
+const mode = qs.get('mode') || 'poses';
+const CELL = parseInt(qs.get('cell') || '460', 10);
+const ZOOM = parseFloat(qs.get('zoom') || '1.55');
+
+const SET = new URLSearchParams(location.search).get('set') || 'body';
+const POSES = SET === 'head'
+  ? ['neutral', 'happy', 'laugh', 'wink', 'sleepy', 'surprised', 'thinking', 'shy']
+  : ['idle', 'wave', 'cheer', 'run', 'sit', 'sleep', 'think', 'wink'];
+const fileFor = (p) => SET === 'head' ? 'out/zapy_head_' + p + '.glb' : 'out/zapy_' + p + '.glb';
+const sheetFile = () => SET === 'head' ? 'out/zapy_heads.glb' : 'out/zapy_poses.glb';
+const VIEWS = {
+  front:   { dir: [0.00, 0.10, 1.00], label: 'front' },
+  front34: { dir: [0.72, 0.30, 0.92], label: '3/4 front' },
+  side:    { dir: [1.00, 0.08, 0.10], label: 'side' },
+  back34:  { dir: [-0.86, 0.34, -0.80], label: '3/4 back' },
+  back:    { dir: [0.00, 0.10, -1.00], label: 'back' },
+  top:     { dir: [0.32, 0.34, 0.88], label: 'hero' }
+};
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: false });
+renderer.setPixelRatio(1);
+renderer.setSize(CELL, CELL, false);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.06;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#F4EEE5');
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.05).texture;
+scene.environmentIntensity = 0.85;
+
+const key = new THREE.DirectionalLight(0xfff2e0, 2.6);
+key.position.set(2.2, 4.2, 2.6);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.near = 0.5;
+key.shadow.camera.far = 12;
+key.shadow.camera.left = -1.4;
+key.shadow.camera.right = 1.4;
+key.shadow.camera.top = 1.4;
+key.shadow.camera.bottom = -1.4;
+key.shadow.bias = -0.0009;
+key.shadow.radius = 4;
+scene.add(key);
+scene.add(key.target);
+
+const fill = new THREE.DirectionalLight(0xdfe8ff, 0.55);
+fill.position.set(-3.2, 2.0, 1.8);
+scene.add(fill);
+
+const rim = new THREE.DirectionalLight(0xffffff, 1.25);
+rim.position.set(-0.6, 2.4, -3.2);
+scene.add(rim);
+
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(6, 64),
+  new THREE.ShadowMaterial({ color: 0x5a4433, opacity: 0.16 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 100);
+
+const loader = new GLTFLoader();
+const loadPose = (p) => new Promise((res, rej) =>
+  loader.load(fileFor(p), (g) => res(g.scene), undefined, rej));
+
+function prep(root) {
+  root.traverse((o) => {
+    if (o.isMesh) {
+      o.castShadow = true;
+      o.receiveShadow = true;
+      if (o.material) { o.material.envMapIntensity = 0.7; o.material.roughness = Math.max(0.28, o.material.roughness || 0.6); }
+    }
+  });
+  return root;
+}
+
+function frame(root, dir) {
+  const box = new THREE.Box3().setFromObject(root);
+  const c = box.getCenter(new THREE.Vector3());
+  const corners = [];
+  for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z])
+    corners.push(new THREE.Vector3(x, y, z));
+  const r = box.getSize(new THREE.Vector3()).length() * 0.5;
+  const vfov = (camera.fov * Math.PI) / 180;
+  const dirV = new THREE.Vector3(...dir).normalize();
+  let dist = (r / Math.sin(vfov / 2)) * ZOOM;
+  for (let iter = 0; iter < 5; iter++) {
+    camera.position.copy(c).add(dirV.clone().multiplyScalar(dist));
+    camera.up.set(0, 1, 0);
+    camera.lookAt(c);
+    camera.updateMatrixWorld(true);
+    camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+    let worst = 0;
+    for (const p of corners) {
+      const v = p.clone().applyMatrix4(camera.matrixWorldInverse);
+      const z = -v.z;
+      if (z <= 1e-3) { worst = 8; break; }
+      worst = Math.max(worst,
+        (Math.abs(v.x) / z) / (Math.tan(vfov / 2) * camera.aspect),
+        (Math.abs(v.y) / z) / Math.tan(vfov / 2));
+    }
+    dist *= worst / 0.93;
+    if (Math.abs(worst - 0.93) < 0.01) break;
+  }
+  camera.position.copy(c).add(dirV.clone().multiplyScalar(dist));
+  camera.lookAt(c);
+  camera.near = Math.max(0.02, dist * 0.05);
+  camera.far = dist * 4 + 20;
+  camera.updateProjectionMatrix();
+  // keep the directional key light + its shadow frustum centred on the subject
+  const ext = Math.max(0.9, box.getSize(new THREE.Vector3()).length() * 0.46);
+  key.position.copy(c).add(new THREE.Vector3(2.2, 4.2, 2.6));
+  key.target.position.copy(c);
+  key.target.updateMatrixWorld();
+  const sc = key.shadow.camera;
+  sc.left = -ext; sc.right = ext; sc.top = ext; sc.bottom = -ext;
+  sc.near = 0.5; sc.far = 14;
+  sc.updateProjectionMatrix();
+  return c;
+}
+
+async function main() {
+  const sheet = document.getElementById('sheet');
+  const W = parseInt(qs.get('w') || '0', 10);
+  const Hh = parseInt(qs.get('h') || '0', 10);
+
+  if (mode === 'lineup') {
+    const g = await loader.loadAsync(sheetFile());
+    const root = prep(g.scene);
+    scene.add(root);
+    const CW = W || 2400, CH = Hh || 900;
+    sheet.width = CW; sheet.height = CH;
+    renderer.setSize(CW, CH, false);
+    camera.aspect = CW / CH;
+    frame(root, [0.0, 0.14, 1.0]);
+    window.__dbg = {
+      aspect: camera.aspect,
+      cam: camera.position.toArray().map((v) => +v.toFixed(3)),
+      bbox: (() => { const b = new THREE.Box3().setFromObject(root); return { min: b.min.toArray(), max: b.max.toArray() }; })(),
+      ndc: (() => {
+        const b = new THREE.Box3().setFromObject(root);
+        const pts = [];
+        for (const x of [b.min.x, b.max.x]) for (const y of [b.min.y, b.max.y]) {
+          const v = new THREE.Vector3(x, y, b.getCenter(new THREE.Vector3()).z).project(camera);
+          pts.push(+v.x.toFixed(3));
+        }
+        return pts;
+      })()
+    };
+    renderer.render(scene, camera);
+    const ctx0 = sheet.getContext('2d');
+    ctx0.drawImage(renderer.domElement, 0, 0, CW, CH);
+    window.__ready = true;
+    window.__cells = 1;
+    return;
+  }
+
+  const cells = [];
+  if (mode === 'turnaround') {
+    for (const v of ['front', 'front34', 'side', 'back34', 'back', 'top']) cells.push({ pose: POSES[0], view: v });
+  } else if (mode === 'frames') {
+    const n = parseInt(qs.get('n') || '36', 10);
+    const pose = qs.get('pose') || 'idle';
+    const elev = parseFloat(qs.get('elev') || '0.22');
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      cells.push({ pose, dir: [Math.sin(a), elev, Math.cos(a)], label: '' });
+    }
+  } else if (mode === 'single') {
+    for (const p of (qs.get('poses') || 'idle').split(',')) {
+      for (const v of (qs.get('views') || 'front34').split(',')) cells.push({ pose: p, view: v });
+    }
+  } else {
+    for (const p of POSES) for (const v of ['front', 'front34', 'side']) cells.push({ pose: p, view: v });
+  }
+
+  const models = {};
+  const needed = [...new Set(cells.map((c) => c.pose))];
+  await Promise.all(needed.map(async (p) => { models[p] = prep(await loadPose(p)); }));
+
+  const cols = mode === 'frames' ? parseInt(qs.get('cols') || '6', 10) : 3;
+  const rows = Math.ceil(cells.length / cols);
+  const LABEL = mode === 'frames' ? 0 : 26;
+  const WW = W || cols * CELL;
+  const HH = Hh || rows * (CELL + LABEL);
+  sheet.width = WW;
+  sheet.height = HH;
+  renderer.setSize(CELL, CELL, false);
+  const ctx = sheet.getContext('2d');
+  ctx.fillStyle = '#E8E1D6';
+  ctx.fillRect(0, 0, WW, HH);
+
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i];
+    const { pose } = cell;
+    const dir = cell.dir || VIEWS[cell.view].dir;
+    const label = cell.label !== undefined ? cell.label : (pose.toUpperCase() + ' · ' + VIEWS[cell.view].label);
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const ox = col * CELL;
+    const oy = row * (CELL + LABEL);
+
+    const root = models[pose];
+    scene.add(root);
+    camera.aspect = 1;
+    frame(root, dir);
+    renderer.render(scene, camera);
+    scene.remove(root);
+
+    ctx.drawImage(renderer.domElement, ox, oy + LABEL, CELL, CELL);
+    if (LABEL) {
+      ctx.fillStyle = '#3A2A1E';
+      ctx.font = '600 15px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif';
+      ctx.fillText(label, ox + 14, oy + 18);
+      ctx.strokeStyle = 'rgba(0,0,0,0.06)';
+      ctx.strokeRect(ox + 0.5, oy + LABEL + 0.5, CELL - 1, CELL - 1);
+    }
+  }
+
+  window.__ready = true;
+  window.__cells = cells.length;
+}
+
+main().catch((e) => {
+  window.__error = String(e && e.stack || e);
+  document.body.insertAdjacentHTML('beforeend',
+    '<pre style="color:#b00;font:12px monospace;padding:8px">' + String(e) + '</pre>');
+});
+</script>
+</body>
+</html>

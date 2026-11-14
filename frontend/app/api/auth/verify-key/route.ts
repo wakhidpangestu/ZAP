@@ -22,17 +22,18 @@ export async function POST(req: Request) {
   }
 
   try {
-    let body: VerifyRequestBody;
+    let parsed: unknown;
     try {
-      body = await req.json();
+      parsed = await req.json();
     } catch {
       return NextResponse.json(
         { valid: false, error: "Payload JSON tidak valid" },
         { status: 400 }
       );
     }
+    const body = (parsed ?? {}) as Partial<VerifyRequestBody>;
 
-    const apiKey = body.apiKey?.trim();
+    const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
     if (!apiKey) {
       return NextResponse.json(
         { valid: false, error: "Google API Key tidak boleh kosong" },

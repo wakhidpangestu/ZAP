@@ -1,13 +1,7 @@
-import { createHash } from "crypto";
 import { NextResponse } from "next/server";
+import { rateLimitByIp } from "@/utils/rate-limit";
 
 const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
-
-function deriveUserKey(identityKey: string): string | undefined {
-  const clean = (identityKey || "").trim().toLowerCase();
-  if (!clean) return undefined;
-  return createHash("sha256").update(`chatzap-user-v1:${clean}`).digest("hex").slice(0, 32);
-}
 
 interface FeedbackRequestBody {
   userMessage?: string;
@@ -21,6 +15,15 @@ interface FeedbackRequestBody {
 
 export async function POST(req: Request) {
   try {
+    // Batasi per IP: endpoint ini memicu panggilan ke backend Python (biaya/CPU).
+    const limit = rateLimitByIp(req, "chat-feedback", 30);
+    if (!limit.allowed) {
+      return NextResponse.json(
+        { status: "ignored", reason: "rate_limited" },
+        { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } }
+      );
+    }
+
     const body = (await req.json().catch(() => ({}))) as FeedbackRequestBody;
     const rawRating = body.rating;
     const numericRating =
@@ -46,14 +49,20 @@ export async function POST(req: Request) {
         ? `anon:${clientIp}`
         : body.userName || "";
 
-    const userKey = deriveUserKey(identityKey);
-
+    let backendRes: Response;
     try {
-      const backendRes = await fetch(`${API_BASE}/api/v1/harness/feedback`, {
+      const harnessSecret = process.env.ZAP_HARNESS_SECRET || "";
+      backendRes = await fetch(`${API_BASE}/api/v1/harness/feedback`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(harnessSecret ? { "X-Harness-Secret": harnessSecret } : {}),
+        },
         body: JSON.stringify({
-          user_key: userKey,
+          // Kirim identitas yang sama dengan yang dipakai rute chat saat
+          // /harness/learn; backend meng-hash-nya menjadi user_key anonim
+          // sehingga umpan balik menempel pada memori pengguna yang benar.
+          user_id: identityKey || undefined,
           conversation_id: body.conversationId ? String(body.conversationId).slice(0, 64) : undefined,
           memory_id: body.memoryId ? String(body.memoryId).slice(0, 64) : undefined,
           user_message: (body.userMessage || "").slice(0, 500),
@@ -62,19 +71,34 @@ export async function POST(req: Request) {
         }),
         signal: AbortSignal.timeout(2000),
       });
-
-      if (backendRes.ok) {
-        const data = await backendRes.json();
-        return NextResponse.json(data);
-      }
     } catch {
-      // Non-blocking fallback when local Python backend is offline
+      // Backend tidak terjangkau: jangan pura-pura berhasil. Klien harus tahu
+      // umpan baliknya tidak tersimpan.
+      return NextResponse.json(
+        {
+          status: "unavailable",
+          error: "Backend memori tidak dapat dijangkau; umpan balik belum tersimpan.",
+        },
+        { status: 503 }
+      );
     }
 
-    return NextResponse.json({
-      status: "recorded_local_fallback",
-      rating: numericRating,
-    });
+    // Teruskan status asli backend (201/200/4xx) supaya UI tidak menampilkan
+    // sukses palsu ketika endpoint tidak ada (404) atau payload ditolak.
+    if (backendRes.status >= 500) {
+      return NextResponse.json(
+        {
+          status: "unavailable",
+          error: `Backend memori mengembalikan ${backendRes.status}; umpan balik belum tersimpan.`,
+        },
+        { status: 503 }
+      );
+    }
+
+    const data = await backendRes
+      .json()
+      .catch(() => ({ status: "error", error: "Respons backend bukan JSON yang valid." }));
+    return NextResponse.json(data, { status: backendRes.status });
   } catch {
     return NextResponse.json({ status: "error" }, { status: 500 });
   }

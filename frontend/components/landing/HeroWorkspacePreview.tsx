@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { motion, useScroll, useTransform } from "framer-motion";
+import { motion, useReducedMotion, useScroll, useTransform } from "framer-motion";
 import ZapLogo from "@/components/ZapLogo";
 import ActionButton from "@/components/landing/ActionButton";
 import {
@@ -35,6 +35,8 @@ export function ContainerScroll({
   });
 
   const [isMobile, setIsMobile] = useState(false);
+  // Preferensi "kurangi gerak" mematikan kemiringan 3D & parallax gulir pada hero.
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
     const checkMobile = () => {
@@ -45,9 +47,13 @@ export function ContainerScroll({
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
 
-  const rotate = useTransform(scrollYProgress, [0, 0.85], isMobile ? [0, 0] : [14, 0]);
-  const scale = useTransform(scrollYProgress, [0, 0.85], isMobile ? [0.96, 1] : [1.03, 1]);
-  const translate = useTransform(scrollYProgress, [0, 0.85], isMobile ? [0, 0] : [0, -50]);
+  const rotate = useTransform(scrollYProgress, [0, 0.85], isMobile || reduceMotion ? [0, 0] : [14, 0]);
+  const scale = useTransform(
+    scrollYProgress,
+    [0, 0.85],
+    reduceMotion ? [1, 1] : isMobile ? [0.96, 1] : [1.03, 1]
+  );
+  const translate = useTransform(scrollYProgress, [0, 0.85], isMobile || reduceMotion ? [0, 0] : [0, -50]);
 
   return (
     <div
@@ -56,7 +62,7 @@ export function ContainerScroll({
     >
       <div
         className="w-full relative"
-        style={{ perspective: isMobile ? "none" : "1200px" }}
+        style={{ perspective: isMobile || reduceMotion ? "none" : "1200px" }}
       >
         <motion.div
           style={{ translateY: translate }}
@@ -95,9 +101,9 @@ export default function HeroWorkspacePreview({
   const [mobileSideOpen, setMobileSideOpen] = useState<boolean>(true);
   const [corpusCount, setCorpusCount] = useState<number>(12428);
   useEffect(() => {
-    const base = process.env.NEXT_PUBLIC_BACKEND_URL || "";
-    if (!base) return;
-    fetch(`${base}/api/v1/harness/stats`)
+    // Statistik diteruskan lewat route server Next (/api/harness/stats) karena
+    // backend kini memakai gerbang X-Harness-Secret yang tidak boleh ada di klien.
+    fetch("/api/harness/stats")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         const n = d && d.corpus && d.corpus.total_records;

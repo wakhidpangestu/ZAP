@@ -14,25 +14,49 @@ from __future__ import annotations
 import os
 import re
 import json
+import time
 import sqlite3
 import hashlib
+import threading
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 
-from backend.cfl import (
-    isolate_first_fault_breakpoint,
-    parse_step_to_symbolic,
-    RobustZeroAnswerGuardrail,
-)
-from backend.cfl.geometry_db import GeometryDatabase
-from backend.data_engine.store import MathCorpusStore, DEFAULT_DB_PATH
-from backend.zapcore.learning import classify_topic, infer_jenjang
+try:
+    from backend.cfl import (
+        isolate_first_fault_breakpoint,
+        parse_step_to_symbolic,
+        RobustZeroAnswerGuardrail,
+    )
+    from backend.cfl.geometry_db import GeometryDatabase
+    from backend.data_engine.store import MathCorpusStore, DEFAULT_DB_PATH
+    from backend.zapcore.learning import classify_topic, infer_jenjang
+except ImportError:  # dijalankan dengan backend/ langsung di sys.path
+    from cfl import (
+        isolate_first_fault_breakpoint,
+        parse_step_to_symbolic,
+        RobustZeroAnswerGuardrail,
+    )
+    from cfl.geometry_db import GeometryDatabase
+    from data_engine.store import MathCorpusStore, DEFAULT_DB_PATH
+    from zapcore.learning import classify_topic, infer_jenjang
 
 DEFAULT_MEMORY_JSONL_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
     "data",
     "zap_agent_memory.jsonl",
 )
+
+# Lock proses untuk penulisan mirror JSONL: beberapa request FastAPI sinkron
+# berjalan di thread pool yang sama dan bisa menulis berkas bersamaan.
+_MEMORY_JSONL_LOCK = threading.Lock()
+
+# Kata sandang/imbuhan umum yang tidak membantu pemeringkatan relevansi.
+_QUERY_STOPWORDS = frozenset({
+    "yang", "dan", "untuk", "dari", "dengan", "pada", "adalah", "itu", "ini",
+    "aku", "saya", "kamu", "kita", "bisa", "bantu", "tolong", "coba", "kak",
+    "bagaimana", "gimana", "cara", "apa", "apakah", "kenapa", "mengapa",
+    "the", "and", "for", "with", "that", "this", "how", "what", "why",
+})
 
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 _PHONE_RE = re.compile(r"(?:\+62|0)8\d{7,11}")
@@ -73,13 +97,13 @@ def extract_math_steps_from_text(text: str, max_steps: int = 8) -> List[str]:
 
     steps: List[str] = []
     # Split by newlines, arrows (->, =>), or semicolons
-    raw_chunks = re.split(r"[\n;]|->|=>|→", text)
+    raw_chunks = re.split(r"[\n;]|->|=>|â†’", text)
     for chunk in raw_chunks:
         candidate = chunk.strip()
         if not candidate:
             continue
         # Remove leading bullet or step numbers like "1.", "Baris 1:", "-"
-        candidate = re.sub(r"^(?:baris\s*\d+\s*[:.]?|\d+\s*[.)]|[-*•])\s*", "", candidate, flags=re.IGNORECASE).strip()
+        candidate = re.sub(r"^(?:baris\s*\d+\s*[:.]?|\d+\s*[.)]|[-*â€¢])\s*", "", candidate, flags=re.IGNORECASE).strip()
         if ":" in candidate and re.search(r"[a-zA-Z]{3,}\s+[a-zA-Z]{3,}", candidate.split(":")[0]):
             candidate = candidate.split(":")[-1].strip()
         if len(candidate) < 3 or len(candidate) > 120:
@@ -115,6 +139,49 @@ def extract_math_steps_from_text(text: str, max_steps: int = 8) -> List[str]:
     return steps
 
 
+def _query_terms(text: str) -> List[str]:
+    """Pecah teks menjadi istilah unik yang layak dipakai untuk skor relevansi."""
+    tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
+    terms: List[str] = []
+    for token in tokens:
+        if len(token) < 2 or token in _QUERY_STOPWORDS:
+            continue
+        if token not in terms:
+            terms.append(token)
+    return terms
+
+
+def _score_memory(row: Dict[str, Any], terms: List[str], normalized_query: str) -> float:
+    """Skor tumpang tindih istilah kueri terhadap satu baris memori episodik.
+
+    Kolom FTS `agent_memory_fts` di database lama tidak dipelihara oleh kode,
+    jadi pemeringkatan memakai pencocokan kata (LIKE di Python) yang
+    deterministik: user_query dan extracted_steps berbobot lebih besar
+    daripada topik, dan kecocokan frasa utuh mendapat bonus.
+    """
+    hay_query = (row.get("user_query") or "").lower()
+    hay_steps = (row.get("extracted_steps") or "").lower()
+    hay_topic = (row.get("topic") or "").lower()
+    hay_resolution = (row.get("socratic_resolution") or "").lower()
+    score = 0.0
+    for term in terms:
+        if term in hay_query:
+            score += 2.0
+        elif term in hay_steps:
+            score += 1.25
+        elif term in hay_topic:
+            score += 0.75
+        elif term in hay_resolution:
+            score += 0.25
+    phrase = (normalized_query or "").strip().lower()
+    if len(phrase) >= 6:
+        if phrase in hay_query:
+            score += 6.0
+        elif phrase[:40] and phrase[:40] in hay_query:
+            score += 2.0
+    return score
+
+
 class ZAPAgentHarness:
     """
     Central Harness for training, continuous conversation learning, and memory retrieval.
@@ -134,12 +201,25 @@ class ZAPAgentHarness:
         os.makedirs(os.path.dirname(self.memory_jsonl_path), exist_ok=True)
         self._init_memory_table()
 
+    def _connect(self) -> sqlite3.Connection:
+        """Koneksi SQLite dengan busy_timeout: penulis paralel menunggu, bukan gagal.
+
+        Endpoint FastAPI sinkron berjalan di thread pool, jadi dua request bisa
+        menulis bersamaan. Tanpa busy_timeout SQLite langsung melempar
+        "database is locked" dan satu giliran belajar hilang.
+        """
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        return conn
+
     def _init_memory_table(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.cursor()
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS agent_episodic_memory (
                     memory_id TEXT PRIMARY KEY,
+                    user_key TEXT,
+                    conversation_id TEXT,
                     tier TEXT NOT NULL,
                     topic TEXT NOT NULL,
                     shape_kind TEXT,
@@ -151,12 +231,37 @@ class ZAPAgentHarness:
                     socratic_resolution TEXT NOT NULL,
                     sympy_verified INTEGER DEFAULT 0,
                     hit_count INTEGER DEFAULT 1,
+                    upvotes INTEGER DEFAULT 0,
+                    downvotes INTEGER DEFAULT 0,
+                    quality_score REAL DEFAULT 0,
                     updated_at TEXT NOT NULL
                 )
             """)
+            # Migrasi aditif untuk database lama: kolom baru ditambahkan tanpa
+            # menghapus data. Pola yang sama dipakai MathCorpusStore._init_db.
+            existing_columns = {row[1] for row in cur.execute("PRAGMA table_info(agent_episodic_memory)").fetchall()}
+            migrations = [
+                ("user_key", "ALTER TABLE agent_episodic_memory ADD COLUMN user_key TEXT"),
+                ("conversation_id", "ALTER TABLE agent_episodic_memory ADD COLUMN conversation_id TEXT"),
+                ("upvotes", "ALTER TABLE agent_episodic_memory ADD COLUMN upvotes INTEGER DEFAULT 0"),
+                ("downvotes", "ALTER TABLE agent_episodic_memory ADD COLUMN downvotes INTEGER DEFAULT 0"),
+                ("quality_score", "ALTER TABLE agent_episodic_memory ADD COLUMN quality_score REAL DEFAULT 0"),
+            ]
+            for column, statement in migrations:
+                if column not in existing_columns:
+                    cur.execute(statement)
+            # Baris lama belum punya pemilik. Masukkan ke keranjang "anonymous"
+            # (bukan NULL) supaya predikat user_key selalu punya nilai yang bisa
+            # diprediksi dan tidak ada baris yang lolos lewat IS NULL.
+            cur.execute(
+                "UPDATE agent_episodic_memory SET user_key = 'anonymous' "
+                "WHERE user_key IS NULL OR TRIM(user_key) = ''"
+            )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_topic ON agent_episodic_memory(topic)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_tier ON agent_episodic_memory(tier)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_misconception ON agent_episodic_memory(misconception_type)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_user ON agent_episodic_memory(user_key)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_user_topic ON agent_episodic_memory(user_key, topic)")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS learner_profiles (
                     profile_key TEXT PRIMARY KEY,
@@ -171,11 +276,39 @@ class ZAPAgentHarness:
                     updated_at TEXT
                 )
             """)
+            # Umpan balik up/down dari rute chat. Dipisah dari baris memori
+            # supaya umpan balik untuk memori yang sudah dihapus tidak hilang.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS agent_feedback (
+                    feedback_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    memory_id TEXT,
+                    conversation_id TEXT,
+                    user_key TEXT NOT NULL,
+                    rating INTEGER NOT NULL,
+                    comment TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_feedback_memory ON agent_feedback(memory_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_feedback_user ON agent_feedback(user_key)")
             conn.commit()
 
     @staticmethod
-    def _compute_memory_id(topic: str, normalized_query: str, steps: List[str]) -> str:
-        payload = f"{topic.lower()}|{normalized_query.lower().strip()}|{'||'.join(steps)}"
+    def _compute_memory_id(
+        topic: str,
+        normalized_query: str,
+        steps: List[str],
+        user_key: str = "anonymous",
+    ) -> str:
+        """memory_id dedup per pemilik: pengguna berbeda tidak saling menimpa.
+
+        Keranjang "anonymous" tetap memakai rumus lama (tanpa user) agar baris
+        seed yang sudah ada diperbarui di tempat, bukan diduplikasi.
+        """
+        parts = [topic.lower(), normalized_query.lower().strip(), "||".join(steps)]
+        if user_key and user_key != "anonymous":
+            parts.insert(0, user_key)
+        payload = "|".join(parts)
         digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
         return f"mem_{digest}"
 
@@ -187,14 +320,19 @@ class ZAPAgentHarness:
         target_var: str = "x",
         tier_hint: Optional[str] = None,
         user_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Distill a single user-assistant conversation turn into ZAP's episodic memory
         and (when SymPy-verified) promote it to the permanent MathCorpusStore.
+
+        `user_id` (opsional) di-hash menjadi `user_key` anonim: memori satu
+        pengguna tidak pernah diambil atau ditimpa oleh pengguna lain.
         """
         clean_user = redact_pii(user_message)
         if not clean_user and not explicit_steps:
             return {"status": "skipped", "reason": "empty_input"}
+        user_key = self._user_key(user_id)
 
         # 1. Extract or normalize algebraic steps
         steps = [s.strip() for s in (explicit_steps or []) if s and s.strip()]
@@ -263,54 +401,54 @@ class ZAPAgentHarness:
                 )
 
         socratic_resolution = RobustZeroAnswerGuardrail.sanitize(raw_resolution)
-        memory_id = self._compute_memory_id(topic, clean_user[:160], steps)
+        memory_id = self._compute_memory_id(topic, clean_user[:160], steps, user_key)
         now_iso = datetime.now(timezone.utc).isoformat()
 
-        # 5. Upsert into SQLite agent_episodic_memory
-        with sqlite3.connect(self.db_path) as conn:
+        # 5. Upsert into SQLite agent_episodic_memory (atomik, aman untuk penulis paralel)
+        with self._connect() as conn:
             cur = conn.cursor()
-            cur.execute("SELECT hit_count FROM agent_episodic_memory WHERE memory_id = ?", (memory_id,))
-            existing = cur.fetchone()
-            if existing:
-                hit_count = existing[0] + 1
-                cur.execute(
-                    """
-                    UPDATE agent_episodic_memory
-                    SET hit_count = ?, socratic_resolution = ?, updated_at = ?
-                    WHERE memory_id = ?
-                    """,
-                    (hit_count, socratic_resolution, now_iso, memory_id),
-                )
-            else:
-                hit_count = 1
-                cur.execute(
-                    """
-                    INSERT INTO agent_episodic_memory (
-                        memory_id, tier, topic, shape_kind, user_query, extracted_steps,
-                        cfl_status, misconception_type, counter_example, socratic_resolution,
-                        sympy_verified, hit_count, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        memory_id,
-                        tier,
-                        topic,
-                        shape_kind,
-                        clean_user[:500],
-                        json.dumps(steps, ensure_ascii=False),
-                        cfl_status,
-                        misconception_type,
-                        json.dumps(counter_example, ensure_ascii=False) if counter_example else None,
-                        socratic_resolution,
-                        1 if sympy_verified else 0,
-                        hit_count,
-                        now_iso,
-                    ),
-                )
+            cur.execute(
+                """
+                INSERT INTO agent_episodic_memory (
+                    memory_id, user_key, conversation_id, tier, topic, shape_kind,
+                    user_query, extracted_steps, cfl_status, misconception_type,
+                    counter_example, socratic_resolution, sympy_verified, hit_count,
+                    upvotes, downvotes, quality_score, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 0, 0, ?)
+                ON CONFLICT(memory_id) DO UPDATE SET
+                    hit_count = agent_episodic_memory.hit_count + 1,
+                    socratic_resolution = excluded.socratic_resolution,
+                    conversation_id = COALESCE(excluded.conversation_id, agent_episodic_memory.conversation_id),
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    memory_id,
+                    user_key,
+                    conversation_id,
+                    tier,
+                    topic,
+                    shape_kind,
+                    clean_user[:500],
+                    json.dumps(steps, ensure_ascii=False),
+                    cfl_status,
+                    misconception_type,
+                    json.dumps(counter_example, ensure_ascii=False) if counter_example else None,
+                    socratic_resolution,
+                    1 if sympy_verified else 0,
+                    now_iso,
+                ),
+            )
+            row = cur.execute(
+                "SELECT hit_count FROM agent_episodic_memory WHERE memory_id = ?",
+                (memory_id,),
+            ).fetchone()
+            hit_count = int(row[0]) if row else 1
             conn.commit()
 
         memory_record = {
             "memory_id": memory_id,
+            "user_key": user_key,
+            "conversation_id": conversation_id,
             "tier": tier,
             "topic": topic,
             "shape_kind": shape_kind,
@@ -378,30 +516,142 @@ class ZAPAgentHarness:
             "socratic_resolution": socratic_resolution,
         }
 
+    def _fetch_memory_record(self, memory_id: str) -> Optional[Dict[str, Any]]:
+        """Baca ulang satu baris memori dari SQLite sebagai dict mirror JSONL."""
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM agent_episodic_memory WHERE memory_id = ?", (memory_id,)
+            ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        try:
+            steps = json.loads(data.get("extracted_steps") or "[]")
+        except (TypeError, ValueError):
+            steps = []
+        try:
+            counter_example = json.loads(data["counter_example"]) if data.get("counter_example") else None
+        except (TypeError, ValueError):
+            counter_example = None
+        return {
+            "memory_id": data.get("memory_id"),
+            "user_key": data.get("user_key"),
+            "conversation_id": data.get("conversation_id"),
+            "tier": data.get("tier"),
+            "topic": data.get("topic"),
+            "shape_kind": data.get("shape_kind"),
+            "user_query": data.get("user_query"),
+            "extracted_steps": steps,
+            "cfl_status": data.get("cfl_status"),
+            "misconception_type": data.get("misconception_type"),
+            "counter_example": counter_example,
+            "socratic_resolution": data.get("socratic_resolution"),
+            "sympy_verified": bool(data.get("sympy_verified")),
+            "hit_count": int(data.get("hit_count") or 0),
+            "updated_at": data.get("updated_at"),
+        }
+
     def _sync_memory_jsonl(self, latest_record: Dict[str, Any]) -> None:
-        """Maintain deduplicated JSONL file of episodic agent memories."""
-        records: Dict[str, Dict[str, Any]] = {}
-        if os.path.exists(self.memory_jsonl_path):
-            try:
+        """Tulis mirror JSONL secara atomik (file sementara + os.replace).
+
+        Catatan implementasi:
+        - Lock proses mencegah dua request paralel saling menimpa.
+        - Baris korup tidak menggagalkan seluruh penulisan; baris mentahnya
+          disimpan ke `<path>.corrupt`, bukan hilang diam-diam.
+        - Nilai terbaru dibaca ulang dari SQLite (sumber kebenaran) supaya
+          hit_count yang ditulis bukan nilai basi dari penulis yang kalah balapan.
+        """
+        memory_id = latest_record.get("memory_id")
+        if not memory_id:
+            return
+        tmp_path = f"{self.memory_jsonl_path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        with _MEMORY_JSONL_LOCK:
+            fresh = self._fetch_memory_record(memory_id) or latest_record
+            records: Dict[str, Dict[str, Any]] = {}
+            corrupt_lines: List[str] = []
+            if os.path.exists(self.memory_jsonl_path):
                 with open(self.memory_jsonl_path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
+                    for raw_line in f:
+                        line = raw_line.strip()
                         if not line:
                             continue
-                        obj = json.loads(line)
-                        mid = obj.get("memory_id")
-                        if mid:
-                            records[mid] = obj
-            except Exception:
-                pass
+                        try:
+                            obj = json.loads(line)
+                        except (json.JSONDecodeError, ValueError):
+                            corrupt_lines.append(raw_line)
+                            continue
+                        if isinstance(obj, dict) and obj.get("memory_id"):
+                            records[obj["memory_id"]] = obj
+            records[memory_id] = fresh
+            with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
+                for item in records.values():
+                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
+            # os.replace bisa gagal sementara di Windows bila pembaca lain
+            # masih memegang berkas; coba beberapa kali sebelum menyerah.
+            for attempt in range(3):
+                try:
+                    os.replace(tmp_path, self.memory_jsonl_path)
+                    break
+                except PermissionError:
+                    if attempt == 2:
+                        raise
+                    time.sleep(0.05)
+            if corrupt_lines:
+                with open(f"{self.memory_jsonl_path}.corrupt", "a", encoding="utf-8") as f:
+                    for raw_line in corrupt_lines:
+                        f.write(raw_line if raw_line.endswith("\n") else raw_line + "\n")
 
-        records[latest_record["memory_id"]] = latest_record
-        with open(self.memory_jsonl_path, "w", encoding="utf-8") as f:
-            for item in records.values():
-                f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    def reconcile_memory_jsonl(self) -> Dict[str, Any]:
+        """Tulis ulang mirror JSONL dari SQLite (sumber kebenaran) secara atomik.
+
+        Dipakai untuk memulihkan baris yang hilang akibat versi lama yang
+        menulis mirror di tempat tanpa lock. Mengembalikan jumlah baris yang
+        ditulis; sidik jari tetap dihitung oleh get_memory_stats().
+        """
+        tmp_path = f"{self.memory_jsonl_path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        with _MEMORY_JSONL_LOCK:
+            with self._connect() as conn:
+                memory_ids = [
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT memory_id FROM agent_episodic_memory ORDER BY updated_at ASC"
+                    ).fetchall()
+                ]
+            records: Dict[str, Dict[str, Any]] = {}
+            for memory_id in memory_ids:
+                fresh = self._fetch_memory_record(memory_id)
+                if fresh:
+                    records[memory_id] = fresh
+            with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
+                for item in records.values():
+                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
+            for attempt in range(3):
+                try:
+                    os.replace(tmp_path, self.memory_jsonl_path)
+                    break
+                except PermissionError:
+                    if attempt == 2:
+                        raise
+                    time.sleep(0.05)
+        return {"jsonl_records": len(records)}
 
 
     # ------------------------------------------------------ Learner Profile
+    # ------------------------------------------------------ Isolasi Pengguna
+    @classmethod
+    def _user_key(cls, user_id: Optional[str]) -> str:
+        """Kunci anonim stabil untuk isolasi memori episodik per pengguna.
+
+        Identitas mentah (email/IP) TIDAK pernah disimpan; hanya hash SHA-256
+        terpotong 16 hex yang menjadi `user_key`. Tanpa user_id, pemanggil
+        masuk keranjang "anonymous" (bukan NULL) supaya predikat user_key
+        selalu punya nilai yang bisa diprediksi.
+        """
+        if user_id and str(user_id).strip():
+            return cls._profile_key(str(user_id))
+        return "anonymous"
+
     @staticmethod
     def _profile_key(user_id: str) -> str:
         """Kunci profil anonim: hash SHA-256 dari identitas pengguna.
@@ -424,7 +674,7 @@ class ZAPAgentHarness:
         now_iso = datetime.now(timezone.utc).isoformat()
         is_valid = cfl_status in ("ALL_STEPS_VALID", "SINGLE_EXPRESSION_VALID")
         is_fault = cfl_status == "FAULT_DETECTED"
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.cursor()
             cur.execute("SELECT * FROM learner_profiles WHERE profile_key = ?", (key,))
             row = cur.fetchone()
@@ -474,7 +724,7 @@ class ZAPAgentHarness:
         if not user_id:
             return None
         key = self._profile_key(user_id)
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             cur.execute("SELECT * FROM learner_profiles WHERE profile_key = ?", (key,))
@@ -554,7 +804,7 @@ class ZAPAgentHarness:
             return {"status": "rejected", "reason": "frasa kosong atau spec tidak valid"}
         key = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             self._init_geometry_patterns_table(conn)
             row = conn.execute(
                 "SELECT hits FROM geometry_patterns WHERE pattern_key = ?", (key,)
@@ -577,7 +827,7 @@ class ZAPAgentHarness:
         return {"status": status, "pattern_key": key, "phrase": normalized, "hits": hits}
 
     def list_geometry_patterns(self, limit: int = 200) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             self._init_geometry_patterns_table(conn)
             rows = conn.execute(
                 "SELECT phrase, spec_json, hits FROM geometry_patterns ORDER BY hits DESC, updated_at DESC LIMIT ?",
@@ -624,60 +874,119 @@ class ZAPAgentHarness:
             return None
         return {"phrase": best["phrase"], "spec": best["spec"], "hits": best["hits"], "score": round(best_score, 3)}
 
-    def retrieve_relevant_memories(self, query: str, limit: int = 3) -> List[Dict[str, Any]]:
-        """Retrieve relevant episodic memories ordered by keyword/topic match and hit_count."""
-        topic, hits = classify_topic(query)
-        geo_match = self.geo_db.resolve_intent(query)
-        shape_kind = geo_match["id"] if geo_match else None
+    def retrieve_relevant_memories(
+        self, query: str, limit: int = 3, user_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Ambil memori episodik MILIK satu pengguna, diurutkan relevansi.
 
-        with sqlite3.connect(self.db_path) as conn:
+        Sebelumnya query difilter dengan `topic = ? OR user_query LIKE ?` lalu
+        diurutkan `sympy_verified, hit_count` sehingga frasa unik yang baru
+        dipelajari jarang sekali muncul. Sekarang:
+          1. hanya baris dengan user_key milik pemanggil (isolasi pengguna),
+          2. skor tumpang tindih istilah kueri (lihat _score_memory),
+          3. seri dipecah sympy_verified DESC, hit_count DESC, updated_at DESC.
+        Bila tidak ada istilah yang cocok, kembalikan baris milik pengguna itu
+        saja (fallback personal, bukan baris acak lintas pengguna).
+        """
+        user_key = self._user_key(user_id)
+        terms = _query_terms(query)
+        normalized = (query or "").strip()
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            if shape_kind:
-                cur.execute(
-                    """
-                    SELECT * FROM agent_episodic_memory
-                    WHERE shape_kind = ? OR topic = ?
-                    ORDER BY sympy_verified DESC, hit_count DESC, updated_at DESC
-                    LIMIT ?
-                    """,
-                    (shape_kind, topic, limit),
-                )
-            else:
-                cur.execute(
-                    """
-                    SELECT * FROM agent_episodic_memory
-                    WHERE topic = ? OR user_query LIKE ?
-                    ORDER BY sympy_verified DESC, hit_count DESC, updated_at DESC
-                    LIMIT ?
-                    """,
-                    (topic, f"%{hits[0] if hits else query[:20]}%", limit),
-                )
-            rows = [dict(r) for r in cur.fetchall()]
+            rows = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT * FROM agent_episodic_memory WHERE user_key = ? "
+                    "ORDER BY updated_at DESC LIMIT 2000",
+                    (user_key,),
+                ).fetchall()
+            ]
+        if not rows:
+            return []
 
-            if not rows:
-                cur.execute(
-                    """
-                    SELECT * FROM agent_episodic_memory
-                    ORDER BY sympy_verified DESC, hit_count DESC, updated_at DESC
-                    LIMIT ?
-                    """,
-                    (limit,),
-                )
-                rows = [dict(r) for r in cur.fetchall()]
+        # Urutkan dulu berdasarkan updated_at DESC, lalu stable-sort skor;
+        # updated_at DESC tetap menjadi tiebreak terakhir.
+        ranked = sorted(rows, key=lambda r: str(r.get("updated_at") or ""), reverse=True)
+        scored = [(_score_memory(row, terms, normalized), row) for row in ranked]
+        scored.sort(
+            key=lambda pair: (
+                -pair[0],
+                -int(pair[1].get("sympy_verified") or 0),
+                -int(pair[1].get("hit_count") or 0),
+            )
+        )
+        matched = [row for score, row in scored if score > 0]
+        if matched:
+            return matched[:limit]
+        return [row for _, row in scored[:limit]]
 
-        return rows
+    def _filter_corpus_references(
+        self, corpus_matches: List[Dict[str, Any]], user_key: str
+    ) -> List[Dict[str, Any]]:
+        """Saring referensi korpus hasil promosi percakapan milik pengguna lain.
+
+        Item korpus sintetis/harvester bersifat global (pengetahuan terverifikasi),
+        tetapi item hasil promosi percakapan ber-ID `conv_<memory_id>` membawa
+        pertanyaan asli pengguna. Item seperti itu hanya boleh muncul pada
+        konteks pemiliknya.
+        """
+        if not corpus_matches:
+            return []
+        conv_memory_ids = [
+            str(item.get("id"))[5:]
+            for item in corpus_matches
+            if str(item.get("id") or "").startswith("conv_")
+        ]
+        owners: Dict[str, str] = {}
+        if conv_memory_ids:
+            placeholders = ",".join("?" * len(conv_memory_ids))
+            with self._connect() as conn:
+                for memory_id, owner in conn.execute(
+                    f"SELECT memory_id, user_key FROM agent_episodic_memory WHERE memory_id IN ({placeholders})",
+                    conv_memory_ids,
+                ).fetchall():
+                    owners[str(memory_id)] = str(owner)
+        filtered: List[Dict[str, Any]] = []
+        for item in corpus_matches:
+            corpus_id = str(item.get("id") or "")
+            if corpus_id.startswith("conv_"):
+                if owners.get(corpus_id[5:]) != user_key:
+                    continue
+            filtered.append(item)
+        return filtered
+
+    @staticmethod
+    def _public_memory(row: Dict[str, Any]) -> Dict[str, Any]:
+        """Bentuk aman satu memori untuk respons API (tanpa baris pengguna lain)."""
+        return {
+            "memory_id": row.get("memory_id"),
+            "topic": row.get("topic"),
+            "cfl_status": row.get("cfl_status"),
+            "misconception_type": row.get("misconception_type"),
+            "sympy_verified": bool(row.get("sympy_verified")),
+            "hit_count": int(row.get("hit_count") or 0),
+            "updated_at": row.get("updated_at"),
+            "user_query_snippet": (row.get("user_query") or "")[:80],
+            "socratic_resolution": row.get("socratic_resolution"),
+        }
 
     def build_harness_context(self, query: str, limit: int = 3, user_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Construct the complete ZAP Agent Harness context for a user query:
         combines Episodic Memory, Verified Math Corpus, and 2D/3D Geometry formulas.
+
+        Konteks hanya memuat memori episodik milik pemanggil; referensi korpus
+        hasil promosi percakapan juga disaring ke pemiliknya. Referensi korpus
+        sintetis/harvester tetap global karena berisi pengetahuan terverifikasi.
         """
-        memories = self.retrieve_relevant_memories(query, limit=limit)
-        corpus_matches = self.corpus_store.search_by_keyword(query[:30], limit=limit)
+        user_key = self._user_key(user_id)
+        memories = self.retrieve_relevant_memories(query, limit=limit, user_id=user_id)
+
+        corpus_matches = self.corpus_store.search_ranked(query, limit=max(limit, 5))
         if not corpus_matches:
             topic, _ = classify_topic(query)
-            corpus_matches = self.corpus_store.search_by_keyword(topic, limit=limit)
+            corpus_matches = self.corpus_store.search_ranked(topic, limit=max(limit, 5))
+        corpus_matches = self._filter_corpus_references(corpus_matches, user_key)[:limit]
 
         geo_match = self.geo_db.resolve_intent(query)
 
@@ -700,9 +1009,10 @@ class ZAPAgentHarness:
             lines.append("  [LEARNED_EPISODIC_MEMORIES]")
             for m in memories:
                 misc = m.get("misconception_type") or m.get("cfl_status")
+                snippet = (m.get("user_query") or "").replace("\n", " ")[:80]
                 lines.append(
                     f"    - Topik={m['topic']} | Status={misc} (Hits={m['hit_count']}): "
-                    f"Scaffolding Sokratik -> \"{m['socratic_resolution']}\""
+                    f"Konteks=\"{snippet}\" | Scaffolding Sokratik -> \"{m['socratic_resolution']}\""
                 )
 
         if corpus_matches:
@@ -722,13 +1032,84 @@ class ZAPAgentHarness:
             "harness_context": joined_ctx,
             "learner_profile": learner_profile,
             "geometry_intent": geo_match,
-            "episodic_memories": memories,
+            "episodic_memories": [self._public_memory(m) for m in memories],
             "corpus_references": corpus_matches[:limit],
+        }
+
+    def store_feedback(
+        self,
+        rating: Any,
+        user_id: Optional[str] = None,
+        user_key: Optional[str] = None,
+        memory_id: Optional[str] = None,
+        comment: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Simpan umpan balik up/down satu pengguna ke tabel agent_feedback.
+
+        Bila memory_id menunjuk baris milik pengguna yang sama, kolom
+        upvotes/downvotes/quality_score ikut diperbarui. Umpan balik untuk
+        memori pengguna lain tetap disimpan di agent_feedback, tetapi tidak
+        mengubah baris memori tersebut (tidak ada penulisan lintas pengguna).
+        """
+        if rating in ("up", 1):
+            value = 1
+        elif rating in ("down", -1):
+            value = -1
+        else:
+            raise ValueError("rating harus 'up'/'down' atau 1/-1")
+
+        key = (user_key or "").strip() or self._user_key(user_id)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        clean_comment = redact_pii(comment)[:1000] if comment else None
+
+        with self._connect() as conn:
+            cur = conn.cursor()
+            owner: Optional[str] = None
+            if memory_id:
+                row = cur.execute(
+                    "SELECT user_key FROM agent_episodic_memory WHERE memory_id = ?",
+                    (memory_id,),
+                ).fetchone()
+                owner = str(row[0]) if row and row[0] is not None else None
+            cur.execute(
+                """
+                INSERT INTO agent_feedback (
+                    memory_id, conversation_id, user_key, rating, comment, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (memory_id, conversation_id, key, value, clean_comment, now_iso),
+            )
+            feedback_id = cur.lastrowid
+            applied_to_memory = bool(memory_id and owner == key)
+            if applied_to_memory:
+                up_inc = 1 if value == 1 else 0
+                down_inc = 1 if value == -1 else 0
+                cur.execute(
+                    """
+                    UPDATE agent_episodic_memory
+                    SET upvotes = COALESCE(upvotes, 0) + ?,
+                        downvotes = COALESCE(downvotes, 0) + ?,
+                        quality_score = (COALESCE(upvotes, 0) + ?) - (COALESCE(downvotes, 0) + ?)
+                    WHERE memory_id = ? AND user_key = ?
+                    """,
+                    (up_inc, down_inc, up_inc, down_inc, memory_id, key),
+                )
+            conn.commit()
+
+        return {
+            "status": "recorded",
+            "feedback_id": feedback_id,
+            "memory_id": memory_id,
+            "rating": "up" if value == 1 else "down",
+            "rating_value": value,
+            "applied_to_memory": applied_to_memory,
+            "created_at": now_iso,
         }
 
     def get_memory_stats(self) -> Dict[str, Any]:
         """Return telemetry on ZAP's episodic conversation memory."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.cursor()
             cur.execute("SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM agent_episodic_memory")
             total_episodes, total_hits = cur.fetchone()
@@ -752,10 +1133,28 @@ class ZAPAgentHarness:
             )
             by_misconception = dict(cur.fetchall())
 
+            cur.execute("SELECT COUNT(*) FROM agent_episodic_memory WHERE user_key = 'anonymous'")
+            anonymous_episodes = cur.fetchone()[0]
+
+            cur.execute("SELECT COUNT(*) FROM agent_episodic_memory WHERE user_key IS NULL")
+            unowned_episodes = cur.fetchone()[0]
+
+            cur.execute("SELECT COUNT(*), COALESCE(SUM(rating = 1), 0), COALESCE(SUM(rating = -1), 0) FROM agent_feedback")
+            feedback_total, feedback_up, feedback_down = cur.fetchone()
+
         jsonl_count = 0
+        corrupt_count = 0
         if os.path.exists(self.memory_jsonl_path):
             with open(self.memory_jsonl_path, "r", encoding="utf-8") as f:
-                jsonl_count = sum(1 for line in f if line.strip())
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        corrupt_count += 1
+                        continue
+                    jsonl_count += 1
 
         return {
             "total_episodes": total_episodes,
@@ -766,7 +1165,15 @@ class ZAPAgentHarness:
             "by_tier": by_tier,
             "by_topic": by_topic,
             "by_misconception": by_misconception,
+            "anonymous_episodes": anonymous_episodes,
+            "unowned_episodes": unowned_episodes,
+            "feedback_total": feedback_total,
+            "feedback_up": feedback_up,
+            "feedback_down": feedback_down,
+            # Rekonsiliasi DB (sumber kebenaran) vs mirror JSONL.
             "jsonl_records": jsonl_count,
+            "jsonl_corrupt_lines": corrupt_count,
+            "jsonl_db_delta": jsonl_count - total_episodes,
         }
 
 

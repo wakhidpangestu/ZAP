@@ -32,6 +32,7 @@ class Settings:
     master_key_b64: str | None = None
     master_secret: str | None = None
     google_client_id: str = ""
+    google_client_secret: str | None = None
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.0-flash"
     session_days: int = 7
@@ -77,7 +78,8 @@ def settings_from_env() -> Settings:
         jwt_secret=os.environ.get("ZAP_JWT_SECRET", "dev-insecure-secret-change-me"),
         master_key_b64=os.environ.get("ZAP_MASTER_KEY") or None,
         master_secret=os.environ.get("ZAP_MASTER_SECRET") or None,
-        google_client_id=os.environ.get("ZAP_GOOGLE_CLIENT_ID", ""),
+        google_client_id=os.environ.get("ZAP_GOOGLE_CLIENT_ID") or os.environ.get("GOOGLE_CLIENT_ID", ""),
+        google_client_secret=os.environ.get("ZAP_GOOGLE_CLIENT_SECRET") or os.environ.get("GOOGLE_CLIENT_SECRET") or None,
         gemini_api_key=os.environ.get("ZAP_GEMINI_API_KEY") or None,
         gemini_model=os.environ.get("ZAP_GEMINI_MODEL", "gemini-2.0-flash"),
         session_days=int(os.environ.get("ZAP_SESSION_DAYS", "7")),

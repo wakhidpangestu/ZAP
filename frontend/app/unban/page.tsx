@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useState, useEffect, Suspense } from "react";
-import Link from "next/link";
+import React, { useState, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import ZapLogo from "@/components/ZapLogo";
+import { SiteHeader } from "@/components/site/SiteHeader";
+import { SiteFooter } from "@/components/site/SiteFooter";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -23,6 +23,11 @@ function UnbanContent() {
   const [tokenInput, setTokenInput] = useState<string>("");
   const [message, setMessage] = useState<string>("");
   const [unbannedEmail, setUnbannedEmail] = useState<string>("");
+  // Token pemulihan bersifat SEKALI PAKAI: catat token terakhir yang sudah
+  // ditebus dari URL agar effect yang berjalan dua kali (React StrictMode di
+  // mode dev) tidak menebus token yang sama dua kali - tebusan pertama menandai
+  // token terpakai, sehingga tebusan kedua akan tampil "tidak valid".
+  const attemptedTokenRef = useRef<string | null>(null);
 
   const verifyToken = async (tokenToVerify: string) => {
     const cleanToken = tokenToVerify.trim();
@@ -32,7 +37,14 @@ function UnbanContent() {
     setMessage("");
 
     try {
-      const res = await fetch(`/api/admin/security?token=${encodeURIComponent(cleanToken)}`);
+      // Penebusan token hanya dilayani lewat POST. GET /api/admin/security?token=
+      // sengaja dibalas 405 (agar tautan tidak tereksekusi saat dipindai klien
+      // email), jadi memakai GET di sini membuat tautan pemulihan selalu gagal.
+      const res = await fetch("/api/admin/security", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "redeem_token", token: cleanToken }),
+      });
       const data = await res.json();
 
       if (res.ok && data.success) {
@@ -60,7 +72,10 @@ function UnbanContent() {
       searchParams.get("token") || searchParams.get("unban_token") || searchParams.get("code") || "";
     if (urlToken) {
       setTokenInput(urlToken);
-      verifyToken(urlToken);
+      if (attemptedTokenRef.current !== urlToken) {
+        attemptedTokenRef.current = urlToken;
+        verifyToken(urlToken);
+      }
     } else {
       setStatus("idle");
     }
@@ -72,25 +87,10 @@ function UnbanContent() {
       <div className="fixed inset-0 pointer-events-none bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(120,119,198,0.12),rgba(255,255,255,0))]" />
 
       {/* Header bar */}
-      <header className="relative z-10 w-full max-w-5xl mx-auto px-4 sm:px-6 py-5 flex items-center justify-between gap-2">
-        <Link href="/" className="flex items-center gap-2.5 py-1 group">
-          <ZapLogo className="w-7 h-7 sm:w-8 sm:h-8 text-slate-900 dark:text-white transition-transform group-hover:scale-105" />
-          <span className="font-bold text-base tracking-tight text-slate-900 dark:text-white">ChatZAP</span>
-          <span className="text-xs font-mono px-2 py-0.5 rounded-full bg-slate-200/80 dark:bg-white/10 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-white/10">
-            Account Recovery
-          </span>
-        </Link>
-        <Link
-          href="/chat"
-          className="text-xs text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition py-1.5 px-2.5 min-h-[32px] rounded-lg hover:bg-slate-200/60 dark:hover:bg-white/[0.06] flex items-center gap-1.5"
-        >
-          <span>Masuk ke Chat</span>
-          <ArrowRight className="w-3.5 h-3.5" />
-        </Link>
-      </header>
+      <SiteHeader />
 
       {/* Main card */}
-      <main className="relative z-10 flex-1 flex items-center justify-center p-4 sm:p-6">
+      <main className="relative z-10 flex-1 flex items-center justify-center p-4 pt-24 sm:p-6 sm:pt-28">
         <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#14151a]/90 backdrop-blur-xl border border-slate-200 dark:border-white/10 p-6 sm:p-7 shadow-xl dark:shadow-2xl dark:shadow-black/60 space-y-6">
           {/* VERIFYING STATE */}
           {status === "verifying" && (
@@ -109,7 +109,7 @@ function UnbanContent() {
 
           {/* SUCCESS STATE */}
           {status === "success" && (
-            <div className="text-center py-4 space-y-5 animate-fade-in">
+            <div className="text-center py-4 space-y-5 animate-zoom-in">
               <div className="w-16 h-16 mx-auto rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shadow-lg shadow-emerald-500/20">
                 <CheckCircle2 className="w-8 h-8" />
               </div>
@@ -155,7 +155,7 @@ function UnbanContent() {
 
           {/* ERROR STATE */}
           {status === "error" && (
-            <div className="space-y-5 animate-fade-in">
+            <div className="space-y-5 animate-zoom-in">
               <div className="w-14 h-14 mx-auto rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-600 dark:text-rose-400 shadow-lg shadow-rose-500/20">
                 <AlertTriangle className="w-7 h-7" />
               </div>
@@ -210,7 +210,7 @@ function UnbanContent() {
 
           {/* IDLE STATE: Buka langsung tanpa token di URL */}
           {status === "idle" && (
-            <div className="space-y-5 animate-fade-in">
+            <div className="space-y-5 animate-zoom-in">
               <div className="text-center space-y-1.5">
                 <h1 className="text-base font-bold text-slate-900 dark:text-white inline-flex items-center justify-center gap-2">
                   <KeyRound className="w-5 h-5 text-slate-700 dark:text-slate-200 shrink-0" />
@@ -261,9 +261,7 @@ function UnbanContent() {
       </main>
 
       {/* Footer */}
-      <footer className="relative z-10 py-6 text-center text-xs text-slate-600 dark:text-slate-400">
-        &copy; 2026 ChatZAP - Zero Answer Policy Socratic AI. Dilindungi Invarian CAS SymPy.
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

@@ -1,0 +1,56 @@
+{
+  "runs": [
+    {
+      "finished_at": "2026-11-13T18:00:14.848496+00:00",
+      "max_items_per_source": 10,
+      "inserted_verified": 28,
+      "per_source": {
+        "gsm8k_sample": {
+          "fetched": 10,
+          "verified": 10,
+          "rejected_unverified": 0
+        },
+        "hf_gsm8k_api": {
+          "fetched": 10,
+          "verified": 10,
+          "rejected_unverified": 0
+        },
+        "wikimedia_math_theorems": {
+          "fetched": 8,
+          "verified": 8,
+          "rejected_unverified": 0
+        }
+      },
+      "disabled_sources": {
+        "indo_kurikulum_sd": "HTTP 404 - URL kurikulum tidak tersedia (perlu sumber resmi baru)"
+      }
+    },
+    {
+      "finished_at": "2026-11-13T18:00:43.528860+00:00",
+      "max_items_per_source": 10,
+      "inserted_verified": 28,
+      "per_source": {
+        "gsm8k_sample": {
+          "fetched": 10,
+          "verified": 10,
+          "rejected_unverified": 0
+        },
+        "hf_gsm8k_api": {
+          "fetched": 10,
+          "verified": 10,
+          "rejected_unverified": 0
+        },
+        "wikimedia_math_theorems": {
+          "fetched": 8,
+          "verified": 8,
+          "rejected_unverified": 0
+        }
+      },
+      "disabled_sources": {
+        "indo_kurikulum_sd": "HTTP 404 - URL kurikulum tidak tersedia (perlu sumber resmi baru)"
+      }
+    }
+  ],
+  "last_run_at": "2026-11-13T18:00:43.528860+00:00",
+  "last_inserted_verified": 28
+}

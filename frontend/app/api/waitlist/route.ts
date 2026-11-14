@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
+import { rateLimitByIp } from "@/utils/rate-limit";
 
 interface WaitlistEntry {
   name: string;
@@ -13,6 +14,8 @@ interface WaitlistEntry {
 const memoryWaitlist: WaitlistEntry[] = [];
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+// Batas atas entri agar berkas tidak tumbuh tanpa batas pada deployment terbuka.
+const MAX_WAITLIST_ENTRIES = 20000;
 
 function getWaitlistFilePath(): string {
   try {
@@ -55,6 +58,17 @@ function writeEntries(entries: WaitlistEntry[]): void {
 }
 
 export async function POST(req: Request) {
+  // Pendaftaran publik: batasi per IP agar daftar tidak dapat dibanjiri
+  // (sebelumnya tanpa batas, sehingga satu klien dapat menumbuhkan
+  // waitlist.json tanpa batas).
+  const limit = rateLimitByIp(req, "waitlist", 5);
+  if (!limit.allowed) {
+    return NextResponse.json(
+      { ok: false, error: "Terlalu banyak pendaftaran. Silakan coba lagi nanti." },
+      { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } }
+    );
+  }
+
   let body: unknown;
   try {
     body = await req.json();
@@ -91,6 +105,12 @@ export async function POST(req: Request) {
   const alreadyRegistered = entries.some((entry) => entry.email === email);
   if (alreadyRegistered) {
     return NextResponse.json({ ok: true, duplicate: true });
+  }
+  if (entries.length >= MAX_WAITLIST_ENTRIES) {
+    return NextResponse.json(
+      { ok: false, error: "Daftar tunggu sudah mencapai batas kapasitas." },
+      { status: 503 }
+    );
   }
 
   entries.push({

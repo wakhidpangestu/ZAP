@@ -1,0 +1,118 @@
+{
+  "asset": "ZAPPY",
+  "kind": "character mascot, 3D",
+  "generator": "build_zapy.py (procedural, analytic primitives)",
+  "provenance": {
+    "method": "procedurally authored mesh",
+    "paid_provider_used": null,
+    "blender_used": false,
+    "note": "No atlas_3d / fal_3d provider tool or API key was available in this session, and Blender is not installed. Geometry is generated deterministically in Python."
+  },
+  "license": "project asset (ZAP / logicodix)",
+  "units": "metres",
+  "up_axis": "Y",
+  "forward_axis": "+Z",
+  "height_m": 1.02,
+  "palette": {
+    "cream": {
+      "hex": "#FFF8F0",
+      "roughness": 0.62,
+      "metallic": 0.0
+    },
+    "cream_shade": {
+      "hex": "#EDD3B0",
+      "roughness": 0.7,
+      "metallic": 0.0
+    },
+    "orange": {
+      "hex": "#EE8B3C",
+      "roughness": 0.55,
+      "metallic": 0.0
+    },
+    "orange_deep": {
+      "hex": "#D9702A",
+      "roughness": 0.52,
+      "metallic": 0.0
+    },
+    "ink": {
+      "hex": "#2B1F17",
+      "roughness": 0.32,
+      "metallic": 0.0
+    },
+    "blush": {
+      "hex": "#F5AE8C",
+      "roughness": 0.72,
+      "metallic": 0.0
+    },
+    "white": {
+      "hex": "#FFFFFF",
+      "roughness": 0.25,
+      "metallic": 0.0
+    }
+  },
+  "geometry": {
+    "triangles_per_pose": 39824,
+    "vertices_per_pose": 22406,
+    "parts": [
+      "Torso",
+      "Head",
+      "EarL",
+      "EarR",
+      "EyeL",
+      "EyeR",
+      "LegFL",
+      "LegFR",
+      "LegBL",
+      "LegBR",
+      "Tail"
+    ]
+  },
+  "poses": {
+    "idle": {
+      "file": "out/zapy_idle.glb",
+      "bytes": 788632,
+      "sha256": "476771e8af674a80"
+    },
+    "wave": {
+      "file": "out/zapy_wave.glb",
+      "bytes": 788880,
+      "sha256": "bca62df55bdcfaed"
+    },
+    "cheer": {
+      "file": "out/zapy_cheer.glb",
+      "bytes": 788936,
+      "sha256": "76930c650cd5e379"
+    },
+    "run": {
+      "file": "out/zapy_run.glb",
+      "bytes": 788948,
+      "sha256": "846d040e2f2a21b6"
+    },
+    "sit": {
+      "file": "out/zapy_sit.glb",
+      "bytes": 789000,
+      "sha256": "14a73f68e66ced21"
+    },
+    "sleep": {
+      "file": "out/zapy_sleep.glb",
+      "bytes": 789092,
+      "sha256": "7168deb784a70cb5"
+    },
+    "think": {
+      "file": "out/zapy_think.glb",
+      "bytes": 788848,
+      "sha256": "380938271b86ed62"
+    },
+    "wink": {
+      "file": "out/zapy_wink.glb",
+      "bytes": 788836,
+      "sha256": "1953c02b4e0bbc30"
+    }
+  },
+  "pose_sheet": {
+    "file": "out/zapy_poses.glb",
+    "bytes": 796128,
+    "sha256": "feebd3eaa485386b"
+  },
+  "generated_utc": "2026-11-13T21:07:04+00:00"
+}

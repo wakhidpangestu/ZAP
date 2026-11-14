@@ -388,6 +388,8 @@ class Store:
             sql += " AND topic = ?"
             params.append(topic)
         sql += " ORDER BY quality_score DESC, published_at DESC LIMIT ?"
-        params.append(limit)
+        # LIMIT negatif berarti "tanpa batas" di SQLite; tolak nilai negatif
+        # agar pemanggil tidak bisa melewati batas jumlah baris.
+        params.append(max(0, int(limit)))
         rows = self.conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]

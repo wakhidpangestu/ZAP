@@ -21,6 +21,7 @@ export interface StoredConversation<M, C> {
   targetVar: string;
   userEmail?: string;
   userId?: string;
+  archived?: boolean;
 }
 
 const STORAGE_KEY = "zap_conversations_v1";

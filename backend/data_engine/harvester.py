@@ -22,7 +22,10 @@ import urllib.error
 from typing import List, Dict, Any, Optional
 import sympy as sp
 
-from backend.cfl.guardrail import RobustZeroAnswerGuardrail
+try:
+    from backend.cfl.guardrail import RobustZeroAnswerGuardrail
+except ImportError:  # dijalankan dengan backend/ langsung di sys.path
+    from cfl.guardrail import RobustZeroAnswerGuardrail
 
 OPEN_MATH_SOURCES: Dict[str, Dict[str, Any]] = {
     "gsm8k_sample": {
@@ -66,7 +69,22 @@ OPEN_MATH_SOURCES: Dict[str, Dict[str, Any]] = {
         "topic": "Geometri & Aritmetika Dasar Kurikulum Nasional",
         "subtopic": "Bangun Datar, Bangun Ruang & Pecahan",
         "description": "Indonesian Elementary Math Syllabus (Kurikulum Merdeka)",
+        # DINONAKTIFKAN (audit 14 Nov 2026): URL mengembalikan HTTP 404, jadi
+        # sumber ini tidak pernah menyumbang item. Dibuat eksplisit agar laporan
+        # kejujuran tidak menghitungnya sebagai sumber aktif; aktifkan kembali
+        # begitu ada URL kurikulum yang benar-benar dapat diakses & diverifikasi.
+        "enabled": False,
+        "disabled_reason": "HTTP 404 - URL kurikulum tidak tersedia (perlu sumber resmi baru)",
     },
+}
+
+# Sumber yang dinonaktifkan tidak pernah dipanggil, tetapi tetap tercatat di
+# OPEN_MATH_SOURCES agar alasan dan riwayatnya jelas.
+ENABLED_SOURCES = [key for key, meta in OPEN_MATH_SOURCES.items() if meta.get("enabled", True)]
+DISABLED_SOURCES = {
+    key: meta.get("disabled_reason", "disabled")
+    for key, meta in OPEN_MATH_SOURCES.items()
+    if not meta.get("enabled", True)
 }
 
 
@@ -104,11 +122,36 @@ def _build_socratic_prompt_for_problem(question: str, final_ans: Optional[str] =
     return RobustZeroAnswerGuardrail.sanitize(raw_prompt, final_solution=final_ans)
 
 
+def _redact_final_value_in_steps(steps: List[str], final_ans: Optional[str]) -> List[str]:
+    """
+    Menyensor nilai jawaban akhir yang muncul di dalam langkah penalaran GSM8K.
+
+    Audit 14 Nov 2026: rationale GSM8K berakhir dengan perhitungan jawaban
+    (mis. "She makes 9 * 2 = $18"), sehingga menyimpan rationale apa adanya
+    berarti menyimpan kunci jawaban di field `steps`. Guardrail deklaratif tidak
+    menangkap bentuk "= 18" karena tidak ada kata kunci kesimpulan, jadi
+    penyensoran dilakukan langsung pada hasil ekspresi yang sama dengan jawaban.
+    """
+    if not final_ans or not str(final_ans).strip():
+        return steps
+    number = re.escape(str(final_ans).strip())
+    result_pattern = re.compile(rf"=\s*\$?\s*{number}(?![\d.,])")
+    redacted: List[str] = []
+    for step in steps:
+        redacted.append(result_pattern.sub("= [Berapakah hasil perhitunganmu?]", step))
+    return redacted
+
+
 def _verify_theorem_with_sympy(expr_note: str) -> Dict[str, Any]:
     """Deterministic SymPy check for canonical theorem identities.
 
     FAIL-CLOSED: identities without an implemented check return
     ``is_valid: False`` with status ``"unverified"``.
+
+    Audit 14 Nov 2026: sebelumnya hanya 3 identitas yang punya pemeriksaan,
+    sehingga 5 dari 8 halaman Wikimedia selalu berstatus "unverified" dan tetap
+    masuk korpus. Empat pemeriksaan baru ditambahkan di bawah agar cakupan
+    "verified" naik tanpa mengorbankan prinsip fail-closed.
     """
     try:
         if expr_note == "(x + y)^2 = x^2 + 2*x*y + y^2":
@@ -123,6 +166,39 @@ def _verify_theorem_with_sympy(expr_note: str) -> Dict[str, Any]:
             # Verify Cube (V=8, E=12, F=6)
             is_eq = (8 - 12 + 6) == 2
             return {"identity": expr_note, "cube_check": "8 - 12 + 6 = 2", "is_valid": bool(is_eq), "status": "verified" if is_eq else "failed", "engine": "SymPy CAS"}
+        if expr_note == "c^2 = a^2 + b^2 - 2*a*b*cos(gamma)":
+            # Segitiga siku-siku (a=3, b=4, gamma=90 derajat) harus memberi c^2 = 25.
+            a, b = sp.Integer(3), sp.Integer(4)
+            gamma = sp.pi / 2
+            c_sq = a**2 + b**2 - 2 * a * b * sp.cos(gamma)
+            is_eq = sp.simplify(c_sq - 25) == 0
+            return {"identity": expr_note, "check": "3^2 + 4^2 - 2*3*4*cos(pi/2) = 25", "is_valid": bool(is_eq), "status": "verified" if is_eq else "failed", "engine": "SymPy CAS"}
+        if expr_note == "Integral(f'(x), x) = f(x)":
+            # Teorema dasar kalkulus: integral turunan x^3 harus kembali x^3.
+            x = sp.Symbol("x")
+            f = x**3
+            is_eq = sp.simplify(sp.integrate(sp.diff(f, x), x) - f) == 0
+            return {"identity": expr_note, "check": "integral(d/dx x^3) dx = x^3", "is_valid": bool(is_eq), "status": "verified" if is_eq else "failed", "engine": "SymPy CAS"}
+        if expr_note == "A * X = B":
+            # Eliminasi Gauss: A*X = B dipecahkan eksak lalu dikalikan kembali.
+            A = sp.Matrix([[2, 1], [1, 3]])
+            B = sp.Matrix([5, 10])
+            X = A.solve(B)
+            is_eq = sp.simplify(A * X - B) == sp.zeros(2, 1)
+            return {"identity": expr_note, "check": "A*X = B, A=[[2,1],[1,3]], B=[5,10]", "is_valid": bool(is_eq), "status": "verified" if is_eq else "failed", "engine": "SymPy CAS"}
+        if expr_note == "det(A - lambda*I) = 0":
+            # Nilai eigen matriks diagonal harus membuat determinan nol.
+            lam = sp.Symbol("lambda")
+            A = sp.Matrix([[2, 0], [0, 3]])
+            is_eq = sp.simplify((A - lam * sp.eye(2)).det().subs(lam, 2)) == 0
+            return {"identity": expr_note, "check": "det([[2-l,0],[0,3-l]]) = 0 pada l=2", "is_valid": bool(is_eq), "status": "verified" if is_eq else "failed", "engine": "SymPy CAS"}
+        if expr_note == "a*x^2 + b*x + c = 0":
+            # Rumus kuadratik: akar dari x^2 - 5x + 6 harus 2 dan 3 (uji substitusi).
+            a, b, c = sp.Integer(1), sp.Integer(-5), sp.Integer(6)
+            disc = b**2 - 4 * a * c
+            roots = [(-b + sp.sqrt(disc)) / (2 * a), (-b - sp.sqrt(disc)) / (2 * a)]
+            is_eq = all(sp.simplify(a * r**2 + b * r + c) == 0 for r in roots)
+            return {"identity": expr_note, "check": "akar x^2-5x+6=0 adalah 2 dan 3 dan memenuhi persamaan", "is_valid": bool(is_eq), "status": "verified" if is_eq else "failed", "engine": "SymPy CAS"}
     except Exception:
         pass
     return {"identity": expr_note, "is_valid": False, "status": "unverified", "engine": "SymPy CAS"}
@@ -215,6 +291,12 @@ def fetch_open_math_data(source_key: str, max_items: int = 25) -> List[Dict[str,
     source = OPEN_MATH_SOURCES.get(source_key)
     if not source:
         raise ValueError(f"Unknown source '{source_key}'. Available: {list(OPEN_MATH_SOURCES.keys())}")
+    if not source.get("enabled", True):
+        print(
+            f"[Harvester Info] Source '{source_key}' dinonaktifkan: "
+            f"{source.get('disabled_reason', 'disabled')}"
+        )
+        return []
 
     fmt = source.get("format", "jsonl")
     results: List[Dict[str, Any]] = []
@@ -259,34 +341,47 @@ def fetch_open_math_data(source_key: str, max_items: int = 25) -> List[Dict[str,
 
         if fmt == "hf_rows":
             url = f"{source['url']}&length={min(max_items, 50)}"
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-                rows = payload.get("rows", [])
-                for i, row_wrap in enumerate(rows[:max_items]):
-                    row = row_wrap.get("row", {})
-                    q = row.get("question") or row.get("problem")
-                    a = row.get("answer") or row.get("solution")
-                    if not q or not a:
-                        continue
-                    final_ans = _extract_gsm8k_final_answer(str(a))
-                    steps = _clean_gsm8k_steps(str(a))
-                    verification = _verify_gsm8k_solution(str(a))
-                    results.append({
-                        "id": f"{source_key}_{i}",
-                        "tier": source["tier"],
-                        "topic": source.get("topic", "Penalaran Matematika"),
-                        "subtopic": source.get("subtopic", "Open Benchmark"),
-                        "dimension": "Abstract",
-                        "shape_kind": None,
-                        "question": str(q).strip(),
-                        "steps": steps if steps else [str(a).strip()[:200]],
-                        "target_variable": "x",
-                        "sympy_verification": verification,
-                        "socratic_prompt": _build_socratic_prompt_for_problem(str(q), final_ans),
-                        "source": source["description"],
-                        "is_verified": verification["is_valid"],
-                    })
+            # Datasets Server HF bisa lambat (cold start). Audit 14 Nov 2026:
+            # timeout 10 s membuat sumber ini sering gagal total, jadi diberi
+            # beberapa percobaan dengan timeout lebih longgar.
+            payload: Optional[Dict[str, Any]] = None
+            last_err: Optional[Exception] = None
+            for attempt in range(1, 3):
+                try:
+                    req = urllib.request.Request(url, headers=headers)
+                    with urllib.request.urlopen(req, timeout=25) as resp:
+                        payload = json.loads(resp.read().decode("utf-8"))
+                    break
+                except (urllib.error.URLError, TimeoutError, OSError) as err:
+                    last_err = err
+                    print(f"[Harvester] HF attempt {attempt}/2 gagal: {err}")
+            if payload is None:
+                raise TimeoutError(str(last_err))
+            rows = payload.get("rows", [])
+            for i, row_wrap in enumerate(rows[:max_items]):
+                row = row_wrap.get("row", {})
+                q = row.get("question") or row.get("problem")
+                a = row.get("answer") or row.get("solution")
+                if not q or not a:
+                    continue
+                final_ans = _extract_gsm8k_final_answer(str(a))
+                steps = _redact_final_value_in_steps(_clean_gsm8k_steps(str(a)), final_ans)
+                verification = _verify_gsm8k_solution(str(a))
+                results.append({
+                    "id": f"{source_key}_{i}",
+                    "tier": source["tier"],
+                    "topic": source.get("topic", "Penalaran Matematika"),
+                    "subtopic": source.get("subtopic", "Open Benchmark"),
+                    "dimension": "Abstract",
+                    "shape_kind": None,
+                    "question": str(q).strip(),
+                    "steps": steps if steps else [str(a).strip()[:200]],
+                    "target_variable": "x",
+                    "sympy_verification": verification,
+                    "socratic_prompt": _build_socratic_prompt_for_problem(str(q), final_ans),
+                    "source": source["description"],
+                    "is_verified": verification["is_valid"],
+                })
             return dedupe_by_question(results)
 
         # Default: JSONL format (e.g., gsm8k_sample)
@@ -301,7 +396,7 @@ def fetch_open_math_data(source_key: str, max_items: int = 25) -> List[Dict[str,
                     data = json.loads(line)
                     if "question" in data and "answer" in data:
                         final_ans = _extract_gsm8k_final_answer(data["answer"])
-                        steps = _clean_gsm8k_steps(data["answer"])
+                        steps = _redact_final_value_in_steps(_clean_gsm8k_steps(data["answer"]), final_ans)
                         verification = _verify_gsm8k_solution(data["answer"])
                         results.append({
                             "id": f"{source_key}_{i}",
@@ -331,11 +426,14 @@ def fetch_open_math_data(source_key: str, max_items: int = 25) -> List[Dict[str,
 
 def crawl_all_verified_sources(max_items_per_source: int = 15) -> List[Dict[str, Any]]:
     """
-    Crawl all registered internet sources in OPEN_MATH_SOURCES and return a unified list
-    of verified, guardrail-sanitized mathematical training items.
+    Crawl all ENABLED internet sources and return a unified list of verified,
+    guardrail-sanitized mathematical training items.
+
+    Sumber yang dinonaktifkan (`enabled: False`) dilewati, bukan dicoba lalu
+    gagal, agar log tidak penuh error 404/berulang.
     """
     all_items: List[Dict[str, Any]] = []
-    for key in OPEN_MATH_SOURCES.keys():
+    for key in ENABLED_SOURCES:
         fetched = fetch_open_math_data(key, max_items=max_items_per_source)
         all_items.extend(fetched)
     # Cross-source dedup: the same benchmark served by two mirrors (e.g.

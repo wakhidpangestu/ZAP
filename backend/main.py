@@ -24,7 +24,7 @@ from cfl import (
     RobustZeroAnswerGuardrail
 )
 from cfl.parser import ALLOWED_VARS, parse_single_side
-from data_engine.agent_harness import ZAPAgentHarness
+from data_engine.agent_harness import ZAPAgentHarness, redact_pii
 
 agent_harness = ZAPAgentHarness()
 
@@ -43,7 +43,14 @@ if cors_origins_env == "*":
 elif cors_origins_env:
     allowed_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
 else:
-    allowed_origins = ["http://localhost:3000", "http://localhost:3105"]
+    # 127.0.0.1 ikut didaftarkan: default NEXT_PUBLIC_BACKEND_URL di frontend
+    # memakai 127.0.0.1, dan origin halaman bisa jadi 127.0.0.1:3000 juga.
+    allowed_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3105",
+        "http://127.0.0.1:3105",
+    ]
 
 app.add_middleware(
     CORSMiddleware,
@@ -210,6 +217,20 @@ def verify_expression_equivalence(request: VerifyRequest):
         numeric_decided = False
 
     if numeric_decided:
+        if simplified is not None:
+            # simplify() SUDAH menyimpulkan selisih bukan 0. Sampel numerik yang
+            # kebetulan semuanya 0 (mis. polinomial berakar tepat di titik uji)
+            # tidak boleh dipakai untuk mengklaim ekuivalen.
+            return VerifyResponse(
+                isEquivalent=False,
+                verified=False,
+                method="undecided",
+                message=(
+                    "SymPy menyederhanakan selisih menjadi "
+                    f"{str(simplified)[:120]} (bukan 0), tetapi seluruh titik uji "
+                    "numerik bernilai 0; ekuivalensi tidak dapat dipastikan."
+                ),
+            )
         return VerifyResponse(
             isEquivalent=True,
             verified=True,
@@ -400,9 +421,11 @@ def diagnose_student_scratchpad(request: DiagnoseRequest):
 # ==========================================
 
 class HarnessLearnRequest(BaseModel):
-    user_message: str = Field(..., description="Pesan atau pertanyaan dari siswa/pengguna")
-    assistant_reply: str = Field(default="", description="Balasan Sokratik dari asisten")
-    explicit_steps: list[str] | None = Field(default=None, description="Langkah aljabar eksplisit jika ada")
+    user_message: str = Field(..., max_length=8000, description="Pesan atau pertanyaan dari siswa/pengguna")
+    assistant_reply: str = Field(default="", max_length=8000, description="Balasan Sokratik dari asisten")
+    explicit_steps: list[str] | None = Field(
+        default=None, max_length=50,
+        description="Langkah aljabar eksplisit jika ada (maksimal 50, sama dengan /diagnose)")
     target_variable: str = Field(default="x", max_length=5, description="Variabel target")
     tier_hint: str | None = Field(default=None, description="Jenjang pendidikan opsional (TK s/d S3)")
     user_id: str | None = Field(default=None, max_length=320, description="Identitas pengguna (dihash di server menjadi kunci profil anonim)")
@@ -426,21 +449,10 @@ def harness_learn_from_conversation(req: HarnessLearnRequest, http_request: Requ
 
     Keamanan: bila env ZAP_HARNESS_SECRET terisi, header X-Harness-Secret yang
     cocok wajib dikirim. Bila ZAP_ENV=production dan secret belum diatur,
-    endpoint menolak dengan 503 (fail-closed).
+    endpoint menolak dengan 503 (fail-closed). Di luar production tanpa secret,
+    gerbang fail-open agar pengembangan lokal tetap nyaman.
     """
-    harness_secret = os.environ.get("ZAP_HARNESS_SECRET", "").strip()
-    if harness_secret:
-        provided = http_request.headers.get("X-Harness-Secret", "")
-        if not provided or not hmac.compare_digest(provided, harness_secret):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Header X-Harness-Secret tidak ada atau tidak cocok.",
-            )
-    elif os.environ.get("ZAP_ENV", "").strip().lower() == "production":
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="ZAP_HARNESS_SECRET belum diatur; endpoint learn dinonaktifkan pada mode production.",
-        )
+    _require_harness_secret(http_request)
 
     result = agent_harness.learn_from_conversation(
         user_id=req.user_id,
@@ -489,6 +501,13 @@ class GeometryMatchRequest(BaseModel):
 
 
 def _require_harness_secret(http_request: Request) -> None:
+    """Gerbang bersama untuk semua endpoint /api/v1/harness/*.
+
+    - Bila ZAP_HARNESS_SECRET terisi: header X-Harness-Secret wajib cocok (401).
+    - Bila tidak terisi dan ZAP_ENV=production: 503 (fail-closed).
+    - Bila tidak terisi dan bukan production: fail-open. Ini kenyamanan dev,
+      bukan jaminan keamanan; production wajib mengisi secret.
+    """
     harness_secret = os.environ.get("ZAP_HARNESS_SECRET", "").strip()
     if harness_secret:
         provided = http_request.headers.get("X-Harness-Secret", "")
@@ -500,8 +519,49 @@ def _require_harness_secret(http_request: Request) -> None:
     elif os.environ.get("ZAP_ENV", "").strip().lower() == "production":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="ZAP_HARNESS_SECRET belum diatur; endpoint tulis dinonaktifkan pada mode production.",
+            detail="ZAP_HARNESS_SECRET belum diatur; endpoint harness dinonaktifkan pada mode production.",
         )
+
+
+class HarnessFeedbackRequest(BaseModel):
+    rating: str | int = Field(..., description="Umpan balik: 'up'/'down' atau 1/-1")
+    memory_id: str | None = Field(default=None, max_length=80, description="ID memori episodik yang dinilai")
+    conversation_id: str | None = Field(default=None, max_length=80, description="ID percakapan opsional")
+    user_id: str | None = Field(default=None, max_length=320, description="Identitas pengguna mentah (dihash di server)")
+    user_key: str | None = Field(
+        default=None, max_length=128,
+        description="Kunci anonim yang SUDAH di-hash oleh rute chat Next.js (diutamakan bila ada)")
+    comment: str | None = Field(default=None, max_length=1000, description="Komentar opsional")
+    user_message: str | None = Field(default=None, max_length=500, description="Cuplikan pesan pengguna (opsional)")
+    assistant_reply: str | None = Field(default=None, max_length=600, description="Cuplikan balasan asisten (opsional)")
+
+
+@app.post("/api/v1/harness/feedback", status_code=status.HTTP_201_CREATED, tags=["Agent Harness"])
+def harness_record_feedback(req: HarnessFeedbackRequest, http_request: Request):
+    """Simpan umpan balik up/down siswa ke tabel agent_feedback.
+
+    Secret-gated sama seperti endpoint harness lain: rute chat Next.js
+    meneruskan X-Harness-Secret bila ZAP_HARNESS_SECRET diatur. Tanpa secret
+    (non-production) gerbang fail-open, dan rute chat tetap membatasi 30
+    permintaan/menit per IP.
+    """
+    _require_harness_secret(http_request)
+    key = (req.user_key or "").strip() or agent_harness._user_key(req.user_id)
+    context = req.comment or req.user_message or req.assistant_reply or None
+    try:
+        result = agent_harness.store_feedback(
+            rating=req.rating,
+            user_key=key,
+            memory_id=req.memory_id,
+            comment=redact_pii(context) if context else None,
+            conversation_id=req.conversation_id,
+        )
+    except ValueError as err:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(err),
+        )
+    return result
 
 
 @app.post("/api/v1/harness/geometry-pattern", status_code=status.HTTP_200_OK, tags=["Agent Harness"])
@@ -512,22 +572,25 @@ def harness_learn_geometry_pattern(req: GeometryPatternRequest, http_request: Re
 
 
 @app.get("/api/v1/harness/geometry-patterns", status_code=status.HTTP_200_OK, tags=["Agent Harness"])
-def harness_list_geometry_patterns(limit: int = 200):
-    """Daftar pola geometri yang sudah dipelajari agen dari resolusi tervalidasi."""
+def harness_list_geometry_patterns(http_request: Request, limit: int = 200):
+    """Daftar pola geometri yang sudah dipelajari agen dari resolusi tervalidasi (secret-gated)."""
+    _require_harness_secret(http_request)
     patterns = agent_harness.list_geometry_patterns(limit=limit)
     return {"status": "success", "total": len(patterns), "patterns": patterns}
 
 
 @app.post("/api/v1/harness/geometry-match", status_code=status.HTTP_200_OK, tags=["Agent Harness"])
-def harness_match_geometry_pattern(req: GeometryMatchRequest):
-    """Cocokkan pesan ke pola geometri yang sudah dipelajari (deterministik, tanpa LLM)."""
+def harness_match_geometry_pattern(req: GeometryMatchRequest, http_request: Request):
+    """Cocokkan pesan ke pola geometri yang sudah dipelajari (deterministik, tanpa LLM, secret-gated)."""
+    _require_harness_secret(http_request)
     match = agent_harness.match_geometry_pattern(req.query)
     return {"status": "success", "matched": match is not None, "match": match}
 
 
 @app.get("/api/v1/harness/stats", status_code=status.HTTP_200_OK, tags=["Agent Harness"])
-def harness_memory_stats():
-    """Mengambil statistik memori agen dan korpus pembelajaran berkelanjutan."""
+def harness_memory_stats(http_request: Request):
+    """Statistik memori agen dan korpus pembelajaran (secret-gated, agregat tanpa data per pengguna)."""
+    _require_harness_secret(http_request)
     mem_stats = agent_harness.get_memory_stats()
     return {
         "status": "success",

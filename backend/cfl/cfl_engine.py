@@ -8,6 +8,21 @@ from .parser import parse_step_to_symbolic
 from .classifier import classify_misconception_robust
 from .counter_example import synthesize_counter_example
 
+# Batas derajat polinomial yang masih diserahkan ke sp.solveset. Diukur:
+# x^100 + x^99 = 1 vs x^100 = 1 - x^99 tidak selesai dalam 15 detik, sehingga
+# satu permintaan /diagnose dapat memblokir worker. Di luar batas ini langkah
+# dinyatakan tidak dapat diputuskan (None), bukan dipaksa menjadi vonis.
+MAX_SOLVESET_DEGREE = 12
+
+
+def _polynomial_degree(expr: sp.Expr, var: sp.Symbol) -> int | None:
+    """Derajat polinomial, atau None bila expr bukan polinomial pada var."""
+    try:
+        return int(sp.Poly(expr, var).degree())
+    except (sp.PolynomialError, TypeError, ValueError):
+        return None
+
+
 def steps_equivalent(prev: sp.Expr | sp.Eq, nxt: sp.Expr | sp.Eq, var: sp.Symbol = sp.Symbol('x')) -> bool | None:
     """
     Memvalidasi ekuivalensi matematis antara dua langkah berurutan:
@@ -21,6 +36,13 @@ def steps_equivalent(prev: sp.Expr | sp.Eq, nxt: sp.Expr | sp.Eq, var: sp.Symbol
         if prev.lhs == nxt.lhs:
             if sp.simplify(nxt.rhs - prev.rhs) == 0:
                 return True
+
+        degrees = (
+            _polynomial_degree(prev.lhs - prev.rhs, var),
+            _polynomial_degree(nxt.lhs - nxt.rhs, var),
+        )
+        if any(d is not None and d > MAX_SOLVESET_DEGREE for d in degrees):
+            return None
 
         s1 = sp.solveset(prev.lhs - prev.rhs, var, domain=sp.S.Reals)
         s2 = sp.solveset(nxt.lhs - nxt.rhs, var, domain=sp.S.Reals)
@@ -54,6 +76,10 @@ def isolate_first_fault_breakpoint(raw_lines: list[str], target_var: str = 'x') 
         try:
             sym_obj = parse_step_to_symbolic(line)
             parsed_steps.append((sym_obj, line))
+        except AssertionError:
+            # Invariant 1 (anti-masking): jangan ubah AssertionError internal
+            # / monkeypatch menjadi PARSING_ERROR yang tampak seperti input siswa.
+            raise
         except Exception as err:
             return idx, {
                 "status": "PARSING_ERROR",

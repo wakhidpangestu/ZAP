@@ -279,7 +279,7 @@ def create_app(platform: Platform | None = None) -> FastAPI:
             {"role": m["role"],
              "content": pf.vault.decrypt_for_user(user["id"], m["content_ciphertext"])}
             for m in pf.store.list_messages(conv["id"])
-        ]
+        ][-20:]  # batasi konteks: kirim maksimal 20 pesan terakhir ke penyedia
         pf.store.add_message(
             conv["id"], "user",
             pf.vault.encrypt_for_user(user["id"], body.message),
@@ -330,7 +330,7 @@ def create_app(platform: Platform | None = None) -> FastAPI:
                          topic: str | None = None, limit: int = 10,
                          user: dict = Depends(current_user)):
         items = pf.learning.retrieve_for_tutor(
-            query=q, jenjang=jenjang, topic=topic, limit=min(limit, 50))
+            query=q, jenjang=jenjang, topic=topic, limit=max(1, min(limit, 50)))
         return {"items": items}
 
     # ---------- privasi ----------

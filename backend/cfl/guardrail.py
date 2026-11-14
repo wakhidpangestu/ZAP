@@ -22,7 +22,25 @@ class RobustZeroAnswerGuardrail:
         # Deteksi evaluasi diagonal atau nilai geometri jadi: "d_bidang = 14,14 cm", "diagonal ruang = 17,32 cm"
         r"(?:d(?:[_\s]*(?:bidang|ruang|sisi))?|diagonal(?:[_\s]*(?:bidang|ruang|sisi))?)\s*(?:=|\\approx|≈|adalah)\s*(?:[^\n=]*=)?\s*[-+−]?\s*\d+(?:[.,]\d+)?\s*(?:\\text\{\s*(?:cm|m|mm|satuan)\s*\}|cm|m|mm|satuan)?",
         # Bahasa Inggris fallback
-        r"(?:the\s+(?:final\s+)?answer\s+is|therefore\s+[a-zA-Z]\s*=|we\s+get\s+[a-zA-Z]\s*=)\s*[-+−]?\s*(?:\d+(?:\/\d+)?|\d*\.?\d+)"
+        r"(?:the\s+(?:final\s+)?answer\s+is|therefore\s+[a-zA-Z]\s*=|we\s+get\s+[a-zA-Z]\s*=)\s*[-+−]?\s*(?:\d+(?:\/\d+)?|\d*\.?\d+)",
+        # ------------------------------------------------------------------
+        # Domain non-matematika (fisika, kimia, pemrograman)
+        # Pola di bawah sengaja mensyaratkan penanda simpulan atau baris jawaban
+        # tunggal, agar penalaran antara seperti "jika v = 20 m/s" atau
+        # "algoritma A adalah O(n log n), sedangkan B ..." tidak ikut disaring.
+        # ------------------------------------------------------------------
+        # 6. Kesimpulan fisis dengan satuan: "jadi v = 20 m/s", "maka F = 12 N"
+        r"(?:maka|jadi|sehingga|diperoleh|didapatkan|hasilnya|nilainya|besarnya)\s*,?\s*(?:[A-Za-z]{1,3}\s*=\s*)?[-+]?\d+(?:[.,]\d+)?\s*(?:m/s(?:\^2|²)?|km/jam|cm/s|N|J|W|V|A|Ω|ohm|kg|mol|M|atm|kPa|Pa|K|°C)\b",
+        # 7. Satu baris yang hanya berisi deklarasi besaran: "v = 20 m/s"
+        r"^\s*(?:v|s|a|F|Ek|Ep|V|I|P|n|M|pH|pOH)\s*=\s*[-+]?\d+(?:[.,]\d+)?\s*(?:m/s(?:\^2|²)?|N|J|W|V|A|Ω|ohm|kg|mol|M|atm|kPa|Pa|K|°C)\s*$",
+        # 8. Simpulan numerik umum: "hasilnya 42", "hasil akhir: 3,5", "jawabannya 7"
+        r"(?:hasilnya|hasil\s+akhir(?:nya)?|jawabannya|jawaban\s+akhir(?:nya)?)\s*(?:adalah|=|:)?\s*[-+]?\d+(?:[.,]\d+)?(?:\s*[A-Za-z%°]{1,8}(?:/[A-Za-z]{1,4})?)?",
+        # 9. pH/pOH sebagai jawaban: "pH = 3", "pH larutan adalah 3.5"
+        r"(?:pH|pOH)\s*(?:larutan(?:nya)?\s*)?(?:adalah|=|:)\s*[-+]?\d+(?:[.,]\d+)?",
+        # 10. Output program sebagai jawaban: "output: 7", "output = True", "keluarannya [1, 2, 3]"
+        r"(?:output|keluaran|hasil\s+eksekusi|hasil\s+program)\s*(?:adalah|=|:)\s*(?:[-+]?\d+(?:[.,]\d+)?|True|False|None|\[[^\]\n]{0,60}\])",
+        # 11. Kompleksitas Big-O sebagai jawaban: "kompleksitas waktunya adalah O(n log n)"
+        r"(?:kompleksitas(?:\s+waktu(?:nya)?)?|big[- ]?o|orde)\s*(?:adalah|=|:|yaitu|ialah)\s*O\([^)\n]{1,20}\)"
     ]
 
     @classmethod

@@ -543,3 +543,364 @@ MATH_TAXONOMY: Dict[str, TierDefinition] = {
         ]
     )
 }
+
+
+# =====================================================================
+# Taksonomi Domain Non-Matematika (Pemrograman, Fisika, Kimia)
+# =====================================================================
+# MATH_TAXONOMY di atas TIDAK diubah sama sekali (backward compatible).
+# Deklarasi di bawah ini adalah satu-satunya sumber kebenaran untuk
+# metadata (domain, tier, topic, subtopic) item non-matematika; generators.py
+# hanya boleh memproduksi item yang (domain, topic, subtopic)-nya dideklarasikan
+# di sini. Tier mengikuti jenjang Kurikulum Merdeka tempat materi biasanya
+# diajarkan (SMP/SMA/S1), bukan jenjang baru.
+
+class DomainSubtopicDefinition(SubtopicDefinition):
+    tier: str = "SMA"  # jenjang kurikulum: SMP, SMA, atau S1
+
+class DomainTopicDefinition(TopicDefinition):
+    subtopics: List[DomainSubtopicDefinition] = Field(default_factory=list)
+
+class KnowledgeDomainDefinition(BaseModel):
+    domain: str
+    label: str
+    description: str
+    verification_engine: str  # mesin verifikasi deterministik yang dipakai generator
+    topics: List[DomainTopicDefinition] = Field(default_factory=list)
+
+
+DOMAIN_TAXONOMY: Dict[str, KnowledgeDomainDefinition] = {
+    "pemrograman": KnowledgeDomainDefinition(
+        domain="pemrograman",
+        label="Pemrograman (Python, Logika Boolean, Algoritma)",
+        description=(
+            "Dasar Python, tabel kebenaran boolean, pelacakan loop/rekursi, debugging satu baris, "
+            "dan klasifikasi kompleksitas waktu Big-O. Semua kebenaran dihitung dengan mengeksekusi "
+            "template kode pada sandbox AST whitelist (bukan dinilai oleh LLM)."
+        ),
+        verification_engine="Python AST whitelist eval/exec + penghitungan operasi",
+        topics=[
+            DomainTopicDefinition(
+                id="prog_dasar_python",
+                name="Dasar Pemrograman Python",
+                description="Ekspresi aritmetika, prioritas operator, dan nilai kebenaran ekspresi logika.",
+                subtopics=[
+                    DomainSubtopicDefinition(
+                        id="prog_ekspresi_aritmetika",
+                        name="Ekspresi Aritmetika & Prioritas Operator",
+                        tier="SMP",
+                        dimension="Abstract",
+                        key_formulas=[
+                            {"label": "Pembagian Bulat", "formula": "a // b"},
+                            {"label": "Prioritas", "formula": "() > ** > unary > * / // % > + -"}
+                        ],
+                        common_misconceptions=[
+                            "Menganggap / dan // menghasilkan nilai yang sama.",
+                            "Mengabaikan bahwa // dieksekusi sebelum - pada ekspresi campuran."
+                        ]
+                    ),
+                    DomainSubtopicDefinition(
+                        id="prog_tabel_kebenaran",
+                        name="Tabel Kebenaran & Logika Boolean",
+                        tier="SMP",
+                        dimension="Abstract",
+                        key_formulas=[
+                            {"label": "Prioritas Logika", "formula": "not > and > or"},
+                            {"label": "Jumlah Baris", "formula": "2^n untuk n variabel boolean"}
+                        ],
+                        common_misconceptions=[
+                            "Menganggap and dan or dapat dipertukarkan tanpa tanda kurung.",
+                            "Lupa bahwa not mengikat lebih kuat daripada and."
+                        ]
+                    )
+                ]
+            ),
+            DomainTopicDefinition(
+                id="prog_algoritma",
+                name="Algoritma & Pelacakan Eksekusi",
+                description="Menelusuri nilai variabel pada loop/rekursi dan menemukan bug satu baris.",
+                subtopics=[
+                    DomainSubtopicDefinition(
+                        id="prog_trace_loop",
+                        name="Pelacakan Nilai Loop (Trace)",
+                        tier="SMA",
+                        dimension="Abstract",
+                        key_formulas=[
+                            {"label": "Loop Berbatas", "formula": "for i in range(a, b + 1)"}
+                        ],
+                        common_misconceptions=[
+                            "Menganggap range(a, b) menyertakan b.",
+                            "Menjumlahkan nilai akhir loop saja tanpa mengakumulasi iterasi sebelumnya."
+                        ]
+                    ),
+                    DomainSubtopicDefinition(
+                        id="prog_trace_recursion",
+                        name="Pelacakan Rekursi",
+                        tier="SMA",
+                        dimension="Abstract",
+                        key_formulas=[
+                            {"label": "Basis Rekursi", "formula": "if n <= 1: return 1"},
+                            {"label": "Langkah Rekursi", "formula": "return n * f(n - 1)"}
+                        ],
+                        common_misconceptions=[
+                            "Melewatkan kondisi basis sehingga rekursi tidak berhenti.",
+                            "Menghitung hasil sekali panggilan tanpa mengalikan seluruh tumpukan rekursi."
+                        ]
+                    ),
+                    DomainSubtopicDefinition(
+                        id="prog_debug_satu_baris",
+                        name="Debugging Satu Baris Bug",
+                        tier="SMA",
+                        dimension="Abstract",
+                        key_formulas=[],
+                        common_misconceptions=[
+                            "Mengganti inisialisasi akumulator alih-alih badan loop yang salah."
+                        ]
+                    )
+                ]
+            ),
+            DomainTopicDefinition(
+                id="prog_kompleksitas",
+                name="Kompleksitas Algoritma (Big-O)",
+                description="Klasifikasi pertumbuhan jumlah operasi dasar: O(1), O(log n), O(n), O(n log n), O(n^2).",
+                subtopics=[
+                    DomainSubtopicDefinition(
+                        id="prog_big_o",
+                        name="Notasi Big-O Kompleksitas Waktu",
+                        tier="S1",
+                        dimension="Abstract",
+                        key_formulas=[
+                            {"label": "Logaritmik", "formula": "O(\\log n)"},
+                            {"label": "Linear-logaritmik", "formula": "O(n \\log n)"},
+                            {"label": "Kuadratik", "formula": "O(n^2)"}
+                        ],
+                        common_misconceptions=[
+                            "Menyimpulkan O(n^2) hanya karena ada dua variabel, bukan dua loop bersarang.",
+                            "Menganggap loop yang membagi indeks dengan 2 tetap O(n)."
+                        ]
+                    )
+                ]
+            )
+        ]
+    ),
+
+    "fisika": KnowledgeDomainDefinition(
+        domain="fisika",
+        label="Fisika (Kinematika, Dinamika, Energi, Listrik)",
+        description=(
+            "Kinematika v = s/t dan s = v0 t + 1/2 a t^2, Hukum II Newton F = ma, "
+            "energi kinetik/potensial, serta Hukum Ohm dan daya listrik. "
+            "Semua jawaban dihitung ulang secara numerik dengan Python/SymPy pada saat generasi."
+        ),
+        verification_engine="Python/SymPy (bilangan eksak + pengecekan satuan)",
+        topics=[
+            DomainTopicDefinition(
+                id="fis_kinematika",
+                name="Kinematika",
+                description="Hubungan jarak, perpindahan, kelajuan, percepatan, dan waktu.",
+                subtopics=[
+                    DomainSubtopicDefinition(
+                        id="fis_kecepatan",
+                        name="Kelajuan Rata-Rata (v = s/t)",
+                        tier="SMP",
+                        dimension="Abstract",
+                        key_formulas=[{"label": "Kelajuan", "formula": "v = \\frac{s}{t}"}],
+                        common_misconceptions=[
+                            "Membalik pembilang dan penyebut sehingga mengalikan jarak dengan waktu."
+                        ]
+                    ),
+                    DomainSubtopicDefinition(
+                        id="fis_glbb",
+                        name="Gerak Lurus Berubah Beraturan (s = v0 t + 1/2 a t^2)",
+                        tier="SMA",
+                        dimension="Abstract",
+                        key_formulas=[
+                            {"label": "Jarak GLBB", "formula": "s = v_0 t + \\frac{1}{2} a t^2"},
+                            {"label": "Kecepatan GLBB", "formula": "v_t = v_0 + a t"}
+                        ],
+                        common_misconceptions=[
+                            "Lupa mengkuadratkan waktu pada suku percepatan.",
+                            "Menjumlahkan v0 dan a tanpa mengalikan dengan waktu."
+                        ]
+                    )
+                ]
+            ),
+            DomainTopicDefinition(
+                id="fis_dinamika",
+                name="Dinamika",
+                description="Gaya, massa, dan percepatan menurut Hukum II Newton.",
+                subtopics=[
+                    DomainSubtopicDefinition(
+                        id="fis_newton",
+                        name="Hukum II Newton (F = ma)",
+                        tier="SMP",
+                        dimension="Abstract",
+                        key_formulas=[{"label": "Hukum II Newton", "formula": "F = m a"}],
+                        common_misconceptions=[
+                            "Membagi massa dengan percepatan alih-alih mengalikannya."
+                        ]
+                    )
+                ]
+            ),
+            DomainTopicDefinition(
+                id="fis_energi",
+                name="Energi & Usaha",
+                description="Energi kinetik, energi potensial gravitasi, dan konservasi energi mekanik.",
+                subtopics=[
+                    DomainSubtopicDefinition(
+                        id="fis_energi_kinetik",
+                        name="Energi Kinetik (Ek = 1/2 m v^2)",
+                        tier="SMA",
+                        dimension="Abstract",
+                        key_formulas=[{"label": "Energi Kinetik", "formula": "E_k = \\frac{1}{2} m v^2"}],
+                        common_misconceptions=[
+                            "Lupa mengkuadratkan kecepatan.",
+                            "Lupa faktor 1/2 pada rumus energi kinetik."
+                        ]
+                    ),
+                    DomainSubtopicDefinition(
+                        id="fis_energi_potensial",
+                        name="Energi Potensial Gravitasi (Ep = m g h)",
+                        tier="SMA",
+                        dimension="Abstract",
+                        key_formulas=[{"label": "Energi Potensial", "formula": "E_p = m g h"}],
+                        common_misconceptions=[
+                            "Menggunakan kecepatan alih-alih ketinggian pada rumus energi potensial."
+                        ]
+                    )
+                ]
+            ),
+            DomainTopicDefinition(
+                id="fis_listrik",
+                name="Listrik Dinamis",
+                description="Hukum Ohm, hambatan, tegangan, arus, dan daya listrik.",
+                subtopics=[
+                    DomainSubtopicDefinition(
+                        id="fis_hukum_ohm",
+                        name="Hukum Ohm (V = IR)",
+                        tier="SMP",
+                        dimension="Abstract",
+                        key_formulas=[{"label": "Hukum Ohm", "formula": "V = I R"}],
+                        common_misconceptions=[
+                            "Membagi hambatan dengan arus sehingga satuan tegangan tertukar."
+                        ]
+                    ),
+                    DomainSubtopicDefinition(
+                        id="fis_daya_listrik",
+                        name="Daya Listrik (P = VI)",
+                        tier="SMA",
+                        dimension="Abstract",
+                        key_formulas=[
+                            {"label": "Daya Listrik", "formula": "P = V I"},
+                            {"label": "Daya & Hambatan", "formula": "P = I^2 R = \\frac{V^2}{R}"}
+                        ],
+                        common_misconceptions=[
+                            "Menjumlahkan tegangan dan arus alih-alih mengalikannya."
+                        ]
+                    )
+                ]
+            )
+        ]
+    ),
+
+    "kimia": KnowledgeDomainDefinition(
+        domain="kimia",
+        label="Kimia (Mol, Stoikiometri, Larutan, Gas Ideal)",
+        description=(
+            "Konsep mol n = m/Mr, stoikiometri reaksi berbasis koefisien, molaritas M = n/V, "
+            "pH = -log[H+], dan gas ideal PV = nRT. Verifikasi numerik deterministik "
+            "memakai massa atom relatif (Ar) yang dieksplisitkan pada soal."
+        ),
+        verification_engine="Python/SymPy (Ar eksplisit + cek konservasi/keidealan)",
+        topics=[
+            DomainTopicDefinition(
+                id="kim_stoikiometri",
+                name="Konsep Mol & Stoikiometri",
+                description="Hubungan massa, massa molar, jumlah mol, dan rasio koefisien reaksi.",
+                subtopics=[
+                    DomainSubtopicDefinition(
+                        id="kim_mol_massa",
+                        name="Mol & Massa (n = m/Mr)",
+                        tier="SMA",
+                        dimension="Abstract",
+                        key_formulas=[{"label": "Konsep Mol", "formula": "n = \\frac{m}{M_r}"}],
+                        common_misconceptions=[
+                            "Membalik rumus sehingga mengalikan massa dengan Mr."
+                        ]
+                    ),
+                    DomainSubtopicDefinition(
+                        id="kim_stoikiometri_reaksi",
+                        name="Stoikiometri Reaksi (Rasio Koefisien)",
+                        tier="SMA",
+                        dimension="Abstract",
+                        key_formulas=[
+                            {"label": "Rasio Mol", "formula": "n_A / koef_A = n_B / koef_B"}
+                        ],
+                        common_misconceptions=[
+                            "Mengabaikan koefisien reaksi dan menganggap rasio mol selalu 1:1."
+                        ]
+                    )
+                ]
+            ),
+            DomainTopicDefinition(
+                id="kim_larutan",
+                name="Larutan & Asam-Basa",
+                description="Konsentrasi molaritas dan skala pH untuk asam/basa kuat.",
+                subtopics=[
+                    DomainSubtopicDefinition(
+                        id="kim_konsentrasi",
+                        name="Molaritas (M = n/V)",
+                        tier="SMA",
+                        dimension="Abstract",
+                        key_formulas=[{"label": "Molaritas", "formula": "M = \\frac{n}{V(\\text{L})}"}],
+                        common_misconceptions=[
+                            "Memakai volume dalam mL tanpa mengubahnya ke liter."
+                        ]
+                    ),
+                    DomainSubtopicDefinition(
+                        id="kim_ph",
+                        name="Derajat Keasaman (pH)",
+                        tier="SMA",
+                        dimension="Abstract",
+                        key_formulas=[{"label": "pH", "formula": "pH = -\\log_{10}[H^+]"}],
+                        common_misconceptions=[
+                            "Menganggap pH berbanding lurus dengan konsentrasi H+.",
+                            "Lupa tanda negatif pada rumus pH."
+                        ]
+                    )
+                ]
+            ),
+            DomainTopicDefinition(
+                id="kim_gas",
+                name="Gas Ideal",
+                description="Persamaan keadaan gas ideal PV = nRT pada kondisi yang dinyatakan.",
+                subtopics=[
+                    DomainSubtopicDefinition(
+                        id="kim_gas_ideal",
+                        name="Persamaan Gas Ideal (PV = nRT)",
+                        tier="SMA",
+                        dimension="Abstract",
+                        key_formulas=[
+                            {"label": "Gas Ideal", "formula": "P V = n R T"},
+                            {"label": "Konstanta Gas", "formula": "R = 0.082 \\, \\text{L atm mol}^{-1}\\text{K}^{-1}"}
+                        ],
+                        common_misconceptions=[
+                            "Memakai suhu Celsius tanpa mengubahnya ke Kelvin.",
+                            "Menukar posisi P dan V pada persamaan."
+                        ]
+                    )
+                ]
+            )
+        ]
+    )
+}
+
+DOMAIN_NAMES = ("matematika", "pemrograman", "fisika", "kimia")
+
+
+def domain_subtopics(domain: str) -> List[DomainSubtopicDefinition]:
+    """Kembalikan seluruh subtopik non-matematika yang terdeklarasi untuk domain."""
+    definition = DOMAIN_TAXONOMY.get(domain)
+    if definition is None:
+        raise KeyError(f"Domain '{domain}' tidak terdeklarasi. Tersedia: {sorted(DOMAIN_TAXONOMY)}")
+    return [st for topic in definition.topics for st in topic.subtopics]

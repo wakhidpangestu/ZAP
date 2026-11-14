@@ -69,6 +69,54 @@ Every synthesized or harvested training item stored by `MathCorpusStore` must co
 
 ---
 
+## 2b. Multi-Domain Corpus Item Schema (Pemrograman, Fisika, Kimia)
+
+Sejak perluasan domain, item non-matematika memakai field tambahan berikut. Baris
+lama tanpa `domain` tetap valid dan diperlakukan sebagai `"matematika"`.
+
+```json
+{
+  "id": "zap_fis_glbb_1",
+  "domain": "fisika",
+  "tier": "SMA",
+  "topic": "Kinematika",
+  "subtopic": "Gerak Lurus Berubah Beraturan (s = v0 t + 1/2 a t^2)",
+  "subtopic_id": "fis_glbb",
+  "dimension": "Abstract",
+  "question": "Sebuah benda bergerak lurus dengan kecepatan awal v0 = 4 m/s ... Berapa jarak yang ditempuh benda tersebut?",
+  "steps": ["Tuliskan rumus jarak pada GLBB: s = v0 t + 1/2 a t^2.", "Hitung suku v0 t ..."],
+  "target_variable": "s",
+  "socratic_prompt": "Pisahkan perhitungan menjadi dua suku: suku kecepatan awal dan suku percepatan.",
+  "hints": ["Suku mana yang memakai waktu dikuadratkan?", "..."],
+  "verification": {
+    "engine": "Python/SymPy numerik eksak",
+    "answer": "45 m",
+    "is_valid": true,
+    "method": "s = v0 t + 1/2 a t^2 dievaluasi eksak dengan SymPy (s=45)",
+    "detail": { "v0": 4, "a": 2, "t": 5, "s": "45" }
+  },
+  "sympy_verification": { "is_valid": true, "engine": "Python/SymPy numerik eksak" },
+  "source": "ZAP Procedural Synthesis (fisika, machine-verified)"
+}
+```
+
+Aturan verifikasi per domain:
+
+| Domain | Verifikasi deterministik saat generasi |
+| :--- | :--- |
+| `pemrograman` | Template kode dieksekusi pada AST sandbox whitelist (`_safe_eval_expression` / `_safe_exec_template`, builtins dimatikan). Output eksekusi dicatat di `verification.detail.executed_output`. Big-O diverifikasi dari pola jumlah operasi pada n = 8, 16, 32. |
+| `fisika` | `v = s/t`, `s = v0 t + 1/2 a t^2`, `F = ma`, `Ek`, `Ep`, `V = IR`, `P = VI` dihitung ulang dengan SymPy/Python eksak dan dicek silang. |
+| `kimia` | `n = m/Mr` (Mr dari Ar eksplisit), rasio koefisien reaksi, `M = n/V`, `pH = -log10[H+]`, dan `PV = nRT` dihitung ulang numerik. |
+
+### Zero-Answer Invariants for Multi-Domain Items:
+1. **`verification.answer`** adalah satu-satunya tempat jawaban akhir disimpan.
+2. `question`, `socratic_prompt`, `hints`, dan `steps` tidak boleh memuat jawaban
+   (dicek oleh `_build_domain_item` saat generasi dan oleh audit `--audit`).
+3. `domain` wajib salah satu dari `matematika`, `pemrograman`, `fisika`, `kimia`;
+   deklarasi subtopik ada di `DOMAIN_TAXONOMY` (`backend/data_engine/taxonomy.py`).
+
+---
+
 ## 3. Pillar 3: 2D/3D Geometry Database Schema (`data/zap_geometry_database.json`)
 
 Shapes are categorized into `"shapes_2d"`, `"shapes_3d"`, and `"nets_2d"`.

@@ -25,8 +25,8 @@ const ENDPOINTS: EndpointDef[] = [
   {
     id: "stats",
     method: "GET",
-    path: "/api/v1/harness/stats",
-    desc: "Agregat korpus langsung dari database: jumlah record per jenjang dan jumlah pola geometri yang dipelajari.",
+    path: "/api/harness/stats",
+    desc: "Agregat korpus (jumlah record per jenjang/domain dan pola geometri). Diproksikan lewat server Next agar secret harness tetap di sisi server.",
   },
   {
     id: "gmatch",

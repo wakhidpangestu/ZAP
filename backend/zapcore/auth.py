@@ -49,7 +49,13 @@ def validate_jenjang(jenjang: str | None) -> str:
 
 
 def _default_http_get(url: str, params: dict) -> tuple[int, dict]:
-    resp = httpx.get(url, params=params, timeout=10.0)
+    # Kegagalan jaringan ke tokeninfo Google harus menjadi AuthError 503,
+    # bukan pengecualian mentah yang berakhir sebagai 500.
+    try:
+        resp = httpx.get(url, params=params, timeout=10.0)
+    except httpx.HTTPError as err:
+        raise AuthError(
+            "Layanan verifikasi Google tidak dapat dihubungi", 503) from err
     try:
         return resp.status_code, resp.json()
     except Exception:

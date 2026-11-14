@@ -363,7 +363,7 @@
       "name_en": "Cylinder",
       "dimension": "3D",
       "category": "Bangun Ruang Sisi Lengkung",
-      "aliases": ["tabung", "silinder", "cylinder", "can"],
+      "aliases": ["tabung", "silinder", "cylinder", "kaleng"],
       "parameters": [
         { "name": "r", "label": "Jari-jari Alas", "default": 7, "unit": "cm", "min": 1, "max": 50 },
         { "name": "t", "label": "Tinggi Silinder", "default": 12, "unit": "cm", "min": 1, "max": 50 }

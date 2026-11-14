@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { GoogleLogo } from "@/components/CompanyLogos";
+import UserAvatar, { cleanAvatarUrl } from "@/components/UserAvatar";
 import { syncAccountBackup, restoreAccountData, clearLocalWorkingSession, saveGoogleIdToken } from "@/utils/account-sync";
 import { markSessionCookie } from "@/lib/session-cookie";
 import {
@@ -98,11 +99,12 @@ export default function GoogleAuthButton({
       if (payload) {
         // Simpan ID token agar sinkronisasi vault bisa diautentikasi ke server.
         saveGoogleIdToken(response.credential);
+        const cleanPic = cleanAvatarUrl(payload.picture);
         const realGoogleUser: ZAPUser = {
           id: payload.sub || "usr_" + Math.random().toString(36).substring(2, 9),
           name: payload.name || "Pengguna Google",
           email: payload.email || "user@gmail.com",
-          avatar: payload.picture || undefined,
+          avatar: cleanPic,
           provider: "google",
           tier: "standard",
           isGuest: false,
@@ -116,6 +118,34 @@ export default function GoogleAuthButton({
           }
           localStorage.setItem("zap_authenticated_user", JSON.stringify(realGoogleUser));
           markSessionCookie();
+
+          if (cleanPic && realGoogleUser.email) {
+            const avatarEmail = realGoogleUser.email.toLowerCase().trim();
+            fetch("/api/user/avatar", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                email: avatarEmail,
+                name: realGoogleUser.name,
+                avatar: cleanPic,
+              }),
+            })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((j) => {
+                if (j?.dataUrl && typeof j.dataUrl === "string" && j.dataUrl.length < 300_000) {
+                  try {
+                    localStorage.setItem(`zap_avatar_dataurl_${avatarEmail}`, j.dataUrl);
+                    window.dispatchEvent(
+                      new CustomEvent("zap_avatar_updated", {
+                        detail: { email: avatarEmail, dataUrl: j.dataUrl },
+                      })
+                    );
+                  } catch {}
+                }
+              })
+              .catch(() => {});
+          }
+
           // Pulihkan data sesi & konfigurasi akun dari cloud
           restoreAccountData(realGoogleUser).finally(() => {
             if (window.location.pathname.includes("/login")) {
@@ -136,6 +166,7 @@ export default function GoogleAuthButton({
         const savedUser = localStorage.getItem("zap_authenticated_user");
         if (savedUser) {
           const parsed: ZAPUser = JSON.parse(savedUser);
+          parsed.avatar = cleanAvatarUrl(parsed.avatar);
           setUser(parsed);
           // Catatan: Jangan panggil onUserChange di mount untuk menghindari redirect loop di halaman /login
         }
@@ -145,16 +176,10 @@ export default function GoogleAuthButton({
     }
   }, []);
 
-  // 2. Setup Google Identity Services (GSI) jika client ID tersedia di environment & bukan localhost yang belum terdaftar origin-nya
+  // 2. Setup Google Identity Services (GSI) jika client ID tersedia di environment
   useEffect(() => {
     const envClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
     if (!envClientId?.trim() || user) return;
-    if (
-      typeof window !== "undefined" &&
-      (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
-    ) {
-      return;
-    }
 
     let timer: NodeJS.Timeout;
 
@@ -214,10 +239,15 @@ export default function GoogleAuthButton({
 
     const kickOff = () => ensureGsiScript(setupGoogleGSI);
     const interactionEvents: Array<keyof DocumentEventMap> = ["pointerdown", "keydown", "touchstart"];
-    interactionEvents.forEach((ev) =>
-      document.addEventListener(ev, kickOff, { once: true, passive: true })
-    );
-    idleHandle.id = setTimeout(kickOff, 6000);
+    const isLoginPage = typeof window !== "undefined" && window.location.pathname.includes("/login");
+    if (isLoginPage) {
+      kickOff();
+    } else {
+      interactionEvents.forEach((ev) =>
+        document.addEventListener(ev, kickOff, { once: true, passive: true })
+      );
+      idleHandle.id = setTimeout(kickOff, 6000);
+    }
     return () => {
       clearTimeout(timer);
       if (idleHandle.id) clearTimeout(idleHandle.id);
@@ -298,7 +328,7 @@ export default function GoogleAuthButton({
       id: "usr_google_" + Date.now().toString(36),
       name: customName || "Pengguna Google",
       email: "user@gmail.com",
-      avatar: "https://lh3.googleusercontent.com/a/default-user=s96-c",
+      avatar: undefined,
       provider: "google",
       tier: "standard",
       isGuest: false,
@@ -329,14 +359,6 @@ export default function GoogleAuthButton({
   // dipakai bila skrip Google gagal dimuat sama sekali.
   const handleFastGoogleLogin = (customName?: string) => {
     if (typeof window === "undefined") return;
-    const isLocalhost =
-      window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-    if (isLocalhost) {
-      // Origin localhost tidak terdaftar di Google Cloud Console; pertahankan
-      // kenyamanan dev dengan profil instan.
-      applyFastFallbackUser(customName);
-      return;
-    }
     if (window.google?.accounts?.id) {
       initAndRenderGsi();
       try {
@@ -400,14 +422,13 @@ export default function GoogleAuthButton({
           className="w-7 h-7 rounded-full ring-1 ring-white/20 hover:ring-white/40 transition flex items-center justify-center overflow-hidden cursor-pointer"
           title={user.name}
         >
-          {user.avatar ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
-          ) : (
-            <div className="w-full h-full bg-zinc-700 text-white flex items-center justify-center font-bold text-xs">
-              {user.name.charAt(0).toUpperCase()}
-            </div>
-          )}
+          <UserAvatar
+            name={user.name}
+            email={user.email}
+            avatar={user.avatar}
+            isGuest={user.isGuest}
+            size="sm"
+          />
         </button>
 
         {dropdownOpen && (
@@ -468,14 +489,13 @@ export default function GoogleAuthButton({
           className="flex items-center justify-between w-full px-2 py-1.5 min-h-[36px] rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.05] cursor-pointer transition text-left"
         >
           <div className="flex items-center gap-2 min-w-0">
-            {user.avatar ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={user.avatar} alt={user.name} className="w-6 h-6 rounded-full object-cover flex-shrink-0" />
-            ) : (
-              <div className="w-6 h-6 rounded-full bg-slate-700 dark:bg-zinc-700 text-white flex items-center justify-center font-bold text-xs flex-shrink-0">
-                {user.name.charAt(0).toUpperCase()}
-              </div>
-            )}
+            <UserAvatar
+              name={user.name}
+              email={user.email}
+              avatar={user.avatar}
+              isGuest={user.isGuest}
+              size="xs"
+            />
             <div className="min-w-0 flex-1 text-left">
               <div className="text-xs font-medium text-slate-800 dark:text-zinc-200 truncate">{user.name}</div>
               <div className="text-xs text-slate-500 dark:text-zinc-400 truncate">{user.email}</div>
@@ -517,14 +537,13 @@ export default function GoogleAuthButton({
     return (
       <div className="w-full flex flex-col items-center gap-3 p-4 rounded-2xl bg-white/[0.04] border border-white/[0.08]">
         <div className="flex items-center gap-3">
-          {user.avatar ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={user.avatar} alt={user.name} className="w-9 h-9 rounded-full object-cover" />
-          ) : (
-            <div className="w-9 h-9 rounded-full bg-zinc-700 text-white flex items-center justify-center font-bold text-sm">
-              {user.name.charAt(0).toUpperCase()}
-            </div>
-          )}
+          <UserAvatar
+            name={user.name}
+            email={user.email}
+            avatar={user.avatar}
+            isGuest={user.isGuest}
+            size="lg"
+          />
           <div className="text-left">
             <div className="font-semibold text-xs text-white flex items-center gap-1.5">
               <span>{user.name}</span>

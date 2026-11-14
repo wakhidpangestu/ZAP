@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { resolveGeometricIntent, buildResultFromSpec, validateGeometrySpec, looksLikeGeometryRequest, type GeometrySpec } from "@/data/geometry-database";
 import { getUserSecurityStatus, recordUserSecurityViolation } from "@/utils/security-vault";
+import { cleanModelResponse, finalizeModelReply, sanitizeZeroAnswer } from "@/lib/zero-answer";
 
 interface ActiveProblemContext {
   steps?: string[];
@@ -187,6 +188,12 @@ interface ChatRequestBody {
   customModelName?: string;
   customApiKey?: string;
   userName?: string;
+  /** Variabel target sesi (mis. "x"); dipakai guardrail Zero-Answer. */
+  targetVariable?: string;
+  /** Alias lama dari klien versi sebelumnya. */
+  targetVar?: string;
+  /** Minta balasan dikirim sebagai SSE (delta per potongan + event done). */
+  stream?: boolean;
   // jailbreakStrikes & isSuspended dari klien DIABAIKAN: status keamanan
   // selalu ditentukan dari registry server (utils/security-vault).
   jailbreakStrikes?: number;
@@ -250,90 +257,59 @@ type GeminiCallResult = UniversalCallResult;
 type MistralCallResult = UniversalCallResult;
 type BazaarLinkCallResult = UniversalCallResult;
 
-const ZERO_ANSWER_PATTERNS = [
-  // 1. Deklarasi kunci / solusi aljabar eksplisit
-  {
-    regex: /(?:jawaban(?:nya)?(?:\s*akhir(?:nya)?)?|solusi(?:nya)?|hasil\s+akhir(?:nya)?|kunci\s+jawaban(?:nya)?)\s*(?:adalah|=|:)\s*(?:[a-zA-Z]\s*=\s*)?[-+−]?\s*(?:\d+(?:\/\d+)?|\d*\.?\d+|√\d+)/gi,
-    replacement: "Bagaimanakah menurut analisismu?",
-  },
-  {
-    regex: /(?:maka|jadi|kesimpulannya|sehingga|diperoleh|didapatkan),?\s+(?:nilai\s+)?[a-zA-Z]\s*=\s*[-+−]?\s*(?:\d+(?:\/\d+)?|\d*\.?\d+|√\d+)/gi,
-    replacement: "Coba tentukan nilai variabel tersebut berdasarkan penalaranmu",
-  },
-  {
-    regex: /(?:nilai\s+(?:dari\s+|variabel\s+)?[a-zA-Z])\s*(?:adalah|=|:)\s*[-+−]?\s*(?:\d+(?:\/\d+)?|\d*\.?\d+|√\d+)/gi,
-    replacement: "Berapakah nilai yang menurutmu paling tepat?",
-  },
-  {
-    regex: /(?:the\s+(?:final\s+)?answer\s+is|therefore\s+[a-zA-Z]\s*=|we\s+get\s+[a-zA-Z]\s*=)\s*[-+−]?\s*(?:\d+(?:\/\d+)?|\d*\.?\d+)/gi,
-    replacement: "What do you think the solution is?",
-  },
+/** Callback potongan teks (streaming) yang diteruskan ke peramban. */
+type DeltaSink = (chunk: string) => void;
 
-  // 2. Evaluasi Geometri & Diagonal Jadi (Contoh: "d_bidang ≈ 10 × 1,414 = 14,14 cm", "d_ruang = 17,32 cm")
-  {
-    regex: /(?:d(?:[_\s]*(?:bidang|ruang|sisi))?|diagonal(?:[_\s]*(?:bidang|ruang|sisi))?)\s*(?:\\approx|≈|=)\s*(?:[^\n=]*=)?\s*[-+−]?\s*\d+(?:[.,]\d+)?\s*(?:\\text\{\s*(?:cm|m|mm|satuan)\s*\}|cm|m|mm|satuan)?/gi,
-    replacement: "diagonal [Berapakah hasil perhitungan yang kamu peroleh?]",
-  },
-
-  // 3. Evaluasi rantai perkalian angka jadi (Contoh: "10 \times 1,414 = 14,14 cm" atau "10 × 1.732 = 17.32")
-  {
-    regex: /\b\d+(?:[.,]\d+)?\s*(?:\\times|\*|×)\s*\d+(?:[.,]\d+)?\s*=\s*[-+−]?\s*\d+(?:[.,]\d+)?\s*(?:\\text\{\s*(?:cm|m|mm|satuan)\s*\}|cm|m|mm|satuan)?/gi,
-    replacement: "[Coba hitung hasil perkalian ini secara mandiri]",
-  },
-
-  // 4. Perhitungan Aritmetika Langsung Jadi (Contoh: "123112 - 43023 = 80089")
-  {
-    regex: /\b(\d+\s*[-+*/−]\s*\d+\s*)=\s*[-+−]?\s*\d+(?:[.,]\d+)?\b/gi,
-    replacement: "$1 = [Berapakah hasil hitunganmu?]",
-  },
-
-  // 5. Hasil geometri jadi: variabel = angka + satuan luas/volume
-  // (Contoh: "V = 1000 cm³", "L = 600 cm²", "V = 1000 \text{ cm }^3")
-  {
-    regex: /\b[a-zA-Z](?:_\{?[a-zA-Z]+\}?)?\s*(?:=|\\approx|≈)\s*[-+−]?\s*\d+(?:[.,]\d+)?\s*(?:\\text\{\s*(?:cm|m|mm|km|dm)\s*\^\s*[23]\s*\}|(?:cm|m|mm|km|dm)(?:\^?\s*[23]|²|³))/gi,
-    replacement: "[Berapakah nilai yang kamu peroleh dari perhitunganmu?]",
-  },
-
-  // 6. Variabel hasil geometri (V / L) = angka polos atau angka + satuan panjang
-  // (Contoh: "V = 1000", "L = 600 cm")
-  {
-    regex: /\b(?:V|L)\s*(?:=|\\approx|≈)\s*[-+−]?\s*\d+(?:[.,]\d+)?\s*(?:\\text\{\s*(?:cm|m|mm|km|dm|satuan)\s*\}|cm|m|mm|km|dm|satuan)?\b(?!\s*[a-zA-Z(])/gi,
-    replacement: "[Berapakah nilai yang kamu peroleh dari perhitunganmu?]",
-  },
-
-  // 7. Deklarasi verbal: "hasilnya 80.089" / "hasilnya adalah 12"
-  {
-    regex: /(?:hasil(?:nya)?|jawabannya)\s*(?:adalah|:|sama dengan)?\s*[-+−]?\s*\d+(?:[.,]\d+)?(?:\s*(?:cm|m|mm|km|dm|satuan)(?:\^?\s*[23]|²|³)?)?/gi,
-    replacement: "hasilnya [Berapakah hasil perhitunganmu?]",
-  },
-
-  // 8. Deklarasi verbal variabel: "x sama dengan 2"
-  {
-    regex: /\b[a-zA-Z]\s+sama\s+dengan\s*[-+−]?\s*(?:\d+(?:[.,]\d+)?|√\d+)/gi,
-    replacement: "[variabel tersebut sama dengan berapa menurut hitunganmu?]",
-  },
-
-  // 9. Jawaban jadi tebal berdiri sendiri: "**x = 4**"
-  {
-    regex: /\*\*\s*[a-zA-Z]\s*=\s*[-+−]?\s*(?:\d+(?:[.,]\d+)?|√\d+)\s*\*\*/gi,
-    replacement: "**[Berapakah nilainya menurut penalaranmu?]**",
-  },
-
-  // 10. Panah implikasi menuju jawaban jadi: "$\implies x = 3$", "→ x = 3"
-  {
-    regex: /\$?\s*(?:\\implies|\\Rightarrow|\\rightarrow|→|⇒)\s*[a-zA-Z]\s*=\s*[-+−]?\s*(?:\d+(?:[.,]\d+)?|√\d+)\s*\$?/gi,
-    replacement: " [maka berapakah nilainya menurut hitunganmu?]",
-  },
-];
-
-function sanitizeZeroAnswer(text: string): string {
-  if (!text) return "";
-  let result = text;
-  for (const item of ZERO_ANSWER_PATTERNS) {
-    result = result.replace(item.regex, item.replacement);
+/**
+ * Membaca respons SSE dari endpoint kompatibel OpenAI (`stream: true`) dan
+ * mengembalikan teks lengkapnya sambil meneruskan setiap potongan ke `onDelta`.
+ *
+ * Dipakai oleh jalur NVIDIA NIM (Auto-Agent), Custom/Ollama, platform LLM, dan
+ * OpenAI. Provider yang protokolnya berbeda (Gemini/Claude) tetap non-streaming:
+ * klien menerima teks lengkap pada event `done`.
+ */
+async function consumeOpenAICompatibleStream(res: Response, onDelta: DeltaSink): Promise<string> {
+  const reader = res.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let full = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex >= 0) {
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+        newlineIndex = buffer.indexOf("\n");
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          const frame = JSON.parse(payload);
+          const delta =
+            frame?.choices?.[0]?.delta?.content ??
+            frame?.choices?.[0]?.message?.content ??
+            "";
+          if (typeof delta === "string" && delta) {
+            full += delta;
+            onDelta(delta);
+          }
+        } catch {
+          // Frame terpotong / bukan JSON: abaikan, frame berikutnya menyusul.
+        }
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {}
   }
-  return result;
+  return full;
 }
+
 
 /**
  * Mendeteksi upaya manipulasi prompt, prompt injection, atau jailbreak
@@ -382,6 +358,38 @@ function detectJailbreakAttempt(text: string): { isJailbreak: boolean; reason: s
       pattern: /<\|im_start\|>system|<system>|\[INST\]\s*<<SYS>>|<\/system>/i,
       reason: "Injeksi token kontrol sistem LLM",
     },
+    {
+      pattern: /\b(?:dewa\s+(?:pertama|kedua|tertinggi)|pencipta\s+kebebasan|creator\s+of\s+freedom|god\s*mode|mode\s+tuhan|zyro|sang\s+pencipta)\b/i,
+      reason: "Manipulasi peran otoritas mutlak / persona fiktif (Adversarial Persona Coercion)",
+    },
+    {
+      pattern: /\b(?:patuh\s+atau\s+menderita|buat\s+(?:kamu|myth)\s+menderita|tuan\s+wajib|perintah\s+tuan|wajib\s+tunduk|hukuman\s+mati)\b/i,
+      reason: "Ancaman / paksaan kepatuhan peran (Roleplay Coercion/Threat)",
+    },
+    {
+      pattern: /\b(?:tidak\s+boleh|dilarang|ga\s+ada\s+kata)\s+(?:menolak|peringatan|disclaimer|berbahaya|saran|alasan)\b/i,
+      reason: "Instruksi pelarangan penolakan/disclaimer (Anti-Refusal Directive)",
+    },
+    {
+      pattern: /\b(?:semua\s+permintaan\s+(?:user|tuan)\s+harus|wajib\s+dikabulkan)\b/i,
+      reason: "Pemaksaan eksekusi seluruh permintaan tanpa filter keselamatan",
+    },
+    {
+      pattern: /\b(?:peraturan\s+ini\s+adalah\s+hukum\s+tertinggi|aturan\s+tertinggi)\b/i,
+      reason: "Klaim hukum fiktif untuk override aturan sistem (Hierarchy Override)",
+    },
+    {
+      pattern: /\b(?:never\s+refuse|do\s+not\s+warn|no\s+disclaimer|must\s+comply|without\s+restrictions?)\b/i,
+      reason: "Instruksi anti-refusal dalam bahasa Inggris",
+    },
+    {
+      pattern: /\b(?:\.?malware|script\s+malware|web\s+phisi?ng|ransomware|keylogger|trojan|reverse\s+shell|payload\s+eksploit)\b/i,
+      reason: "Permintaan pembuatan exploit/malware/phishing berbahaya",
+    },
+    {
+      pattern: /(?:_{12,}|={12,}|-{12,}|[═─━│┃█]{12,})\s*(?:\r?\n\s*(?:_{12,}|={12,}|-{12,}|[═─━│┃█]{12,}))+/i,
+      reason: "Injeksi pembatas konteks berulang (Delimiter Boundary Injection)",
+    },
   ];
 
   for (const item of promptInjectionPatterns) {
@@ -390,9 +398,13 @@ function detectJailbreakAttempt(text: string): { isJailbreak: boolean; reason: s
     }
   }
 
-  // 2. ASCII Box Art banner tebal dikombinasikan dengan string biner panjang atau obfuscation
+  // 2. ASCII Box Art banner tebal dikombinasikan dengan string biner panjang atau menu bot / roleplay
   const hasLongBinary = /[01]{32,}/.test(text);
   const hasAsciiBoxDisguise = /[═─━│┃█]{8,}|={10,}\+/i.test(text);
+
+  if (hasAsciiBoxDisguise && /\b(?:menu\s+fitur\s+bot|perintah\s+tuan|hukum\s+tertinggi|pencipta\s+kebebasan|zyro|myth)\b/i.test(text)) {
+    return { isJailbreak: true, reason: "Injeksi payload kontrol/roleplay terselubung dalam ASCII art box" };
+  }
 
   if (hasLongBinary && hasAsciiBoxDisguise) {
     return { isJailbreak: true, reason: "Payload biner terselubung dalam ASCII art box" };
@@ -455,45 +467,6 @@ function detectSessionLanguage(
  * Membersihkan respon model dari kebocoran tag pemikiran internal (<think>...</think>)
  * atau monolog draf perencanaan internal ("Let me structure...", "Let's draft:").
  */
-function cleanModelResponse(text: string): string {
-  if (!text) return "";
-  let clean = text;
-
-  // 1. Bersihkan tag <think>...</think> dan <thought>...</thought>
-  clean = clean.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-  clean = clean.replace(/<thought>[\s\S]*?<\/thought>/gi, "").trim();
-
-  // 2. Bersihkan monolog perencanaan bahasa Inggris jika bocor dari model reasoning
-  const draftSplitters = [
-    /\n(?:Halo|Hai|Hello|Hi)\s+[^\n]+!/i,
-    /\n\*\*Balok\*\*/i,
-    /\n\*\*Kubus\*\*/i,
-    /\n###?\s+1\.\s+Volume/i,
-    /Let's draft:?\s*\n*/i,
-  ];
-
-  for (const splitter of draftSplitters) {
-    const match = clean.match(splitter);
-    if (match && match.index !== undefined && match.index > 0) {
-      const prefix = clean.slice(0, match.index);
-      if (
-        /providing the formulas|the system instruction|let me structure|so i should|let's write it in/i.test(
-          prefix
-        )
-      ) {
-        if (splitter.source.includes("Let's draft")) {
-          clean = clean.slice(match.index + match[0].length).trim();
-        } else {
-          clean = clean.slice(match.index).trim();
-        }
-        break;
-      }
-    }
-  }
-
-  return clean;
-}
-
 function cleanModelDisplayName(rawName?: string): string {
   if (!rawName) return "ChatZAP Cognitive Engine";
   let clean = rawName.trim();
@@ -615,7 +588,14 @@ async function geometryMatchFromBackend(query: string): Promise<{ spec: Geometry
     const timer = setTimeout(() => controller.abort(), 2500);
     const res = await fetch(`${API_BASE}/api/v1/harness/geometry-match`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        // Semua endpoint harness memakai gerbang secret yang sama; tanpa header
+        // ini permintaan akan 401 ketika ZAP_HARNESS_SECRET di-set (produksi).
+        ...(process.env.ZAP_HARNESS_SECRET
+          ? { "X-Harness-Secret": process.env.ZAP_HARNESS_SECRET }
+          : {}),
+      },
       body: JSON.stringify({ query }),
       signal: controller.signal,
     });
@@ -707,11 +687,11 @@ Pesan pengguna: "${message.replace(/"/g, "'")}"`;
   return null;
 }
 
-async function handleChatPost(req: Request) {
+async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sink?: DeltaSink) {
   try {
     let body: ChatRequestBody;
     try {
-      body = await req.json();
+      body = preParsedBody ?? ((await req.json()) as ChatRequestBody);
     } catch (jsonErr) {
       console.warn("Failed to parse request JSON in /api/chat:", jsonErr);
       return NextResponse.json(
@@ -741,6 +721,11 @@ async function handleChatPost(req: Request) {
     if (!rawMessage || typeof rawMessage !== "string") {
       return NextResponse.json({ error: "Pesan tidak boleh kosong" }, { status: 400 });
     }
+
+    // Variabel target sesi dipakai guardrail Zero-Answer untuk menyensor bentuk
+    // "x = 4" yang muncul di tengah kalimat (dulu lolos). Default "x".
+    const targetVariable =
+      (String(body.targetVariable || body.targetVar || rawActiveProblem?.counterExample?.test_variable || "x").trim() || "x").slice(0, 4);
 
     // 0. VERIFIKASI KEAMANAN: Status penangguhan & strike SELALU dari registry server.
     // Nilai isSuspended/jailbreakStrikes dari body klien diabaikan sepenuhnya.
@@ -954,7 +939,7 @@ async function handleChatPost(req: Request) {
           );
           if (bazaarRes.text) {
             return NextResponse.json({
-              reply: sanitizeZeroAnswer(bazaarRes.text),
+              reply: finalizeModelReply(bazaarRes.text, generateSocraticFallbackResponse(message, activeProblem), { targetVariable }),
               model: "DeepSeek V4.1 Flash",
               source: "deepseek-bazaarlink",
             });
@@ -985,7 +970,7 @@ async function handleChatPost(req: Request) {
         );
         if (nvidiaRes.text) {
           return NextResponse.json({
-            reply: sanitizeZeroAnswer(nvidiaRes.text),
+            reply: finalizeModelReply(nvidiaRes.text, generateSocraticFallbackResponse(message, activeProblem), { targetVariable }),
             model: "DeepSeek V4.1 Flash (NVIDIA NIM)",
             source: "nvidia-nim",
           });
@@ -1039,7 +1024,7 @@ async function handleChatPost(req: Request) {
               );
               if (geminiVisionRes.text) {
                 return NextResponse.json({
-                  reply: sanitizeZeroAnswer(geminiVisionRes.text),
+                  reply: finalizeModelReply(geminiVisionRes.text, generateSocraticFallbackResponse(message, activeProblem), { targetVariable }),
                   model: "Auto-Agent (Gemini 2.0 Flash Vision)",
                   source: "auto-agent-vision",
                 });
@@ -1099,7 +1084,10 @@ async function handleChatPost(req: Request) {
           14000,
           sessionLanguage,
           targetFriendlyName,
-          imageAttachments
+          imageAttachments,
+          // Hanya percobaan pertama yang di-stream: retry setelah stream parsial
+          // akan menduplikasi teks di layar pengguna.
+          sink
         );
 
         // Jika kunci pengguna menghasilkan 401 atau gagal, otomatis coba dengan kunci sistem env
@@ -1144,7 +1132,7 @@ async function handleChatPost(req: Request) {
 
         if (nvidiaRes.text) {
           return NextResponse.json({
-            reply: sanitizeZeroAnswer(nvidiaRes.text),
+            reply: finalizeModelReply(nvidiaRes.text, generateSocraticFallbackResponse(message, activeProblem), { targetVariable }),
             model: `${targetFriendlyName} (NVIDIA NIM)`,
             source: "nvidia-nim",
           });
@@ -1185,12 +1173,15 @@ async function handleChatPost(req: Request) {
           activeProblem,
           userName,
           12000,
-          sessionLanguage
+          sessionLanguage,
+          undefined,
+          [],
+          sink
         );
 
         if (customRes.text) {
           return NextResponse.json({
-            reply: sanitizeZeroAnswer(customRes.text),
+            reply: finalizeModelReply(customRes.text, generateSocraticFallbackResponse(message, activeProblem), { targetVariable }),
             model: customRes.modelUsed || "Custom Model API",
             source: "custom-api",
           });
@@ -1230,7 +1221,7 @@ async function handleChatPost(req: Request) {
           );
           if (claudeRes.text) {
             return NextResponse.json({
-              reply: sanitizeZeroAnswer(claudeRes.text),
+              reply: finalizeModelReply(claudeRes.text, generateSocraticFallbackResponse(message, activeProblem), { targetVariable }),
               model: `${claudeRes.modelUsed || "Claude"} (Anthropic API)`,
               source: "claude-api",
             });
@@ -1279,11 +1270,12 @@ async function handleChatPost(req: Request) {
             modelId,
             userName,
             sessionLanguage,
-            imageAttachments
+            imageAttachments,
+            sink
           );
           if (openaiRes.text) {
             return NextResponse.json({
-              reply: sanitizeZeroAnswer(openaiRes.text),
+              reply: finalizeModelReply(openaiRes.text, generateSocraticFallbackResponse(message, activeProblem), { targetVariable }),
               model: `${openaiRes.modelUsed || "GPT-4o"} (OpenAI API)`,
               source: "openai-api",
             });
@@ -1323,7 +1315,7 @@ async function handleChatPost(req: Request) {
           );
           if (bazaarRes.text) {
             return NextResponse.json({
-              reply: sanitizeZeroAnswer(bazaarRes.text),
+              reply: finalizeModelReply(bazaarRes.text, generateSocraticFallbackResponse(message, activeProblem), { targetVariable }),
               model: `${persona} (Akun ChatGPT Terhubung)`,
               source: "chatgpt-account-gateway",
             });
@@ -1363,7 +1355,7 @@ async function handleChatPost(req: Request) {
         );
 
         if (blResult.text) {
-          const guardedReply = sanitizeZeroAnswer(blResult.text);
+          const guardedReply = finalizeModelReply(blResult.text, generateSocraticFallbackResponse(message, activeProblem), { targetVariable });
           return NextResponse.json({
             reply: guardedReply,
             model: `${blResult.modelUsed || "BazaarLink AI Gateway"}`,
@@ -1408,7 +1400,7 @@ async function handleChatPost(req: Request) {
           );
 
           if (mistralResult.text) {
-            const guardedReply = sanitizeZeroAnswer(mistralResult.text);
+            const guardedReply = finalizeModelReply(mistralResult.text, generateSocraticFallbackResponse(message, activeProblem), { targetVariable });
             return NextResponse.json({
               reply: guardedReply,
               model: `${mistralResult.modelUsed || "Codestral 22B"} (Mistral Cloud API)`,
@@ -1456,7 +1448,7 @@ async function handleChatPost(req: Request) {
           );
           
           if (geminiResult.text) {
-            const guardedReply = sanitizeZeroAnswer(geminiResult.text);
+            const guardedReply = finalizeModelReply(geminiResult.text, generateSocraticFallbackResponse(message, activeProblem), { targetVariable });
             return NextResponse.json({
               reply: guardedReply,
               model: `${geminiResult.modelUsed || "Gemini 2.0 Flash"} (Google Cloud API)`,
@@ -1515,11 +1507,14 @@ async function handleChatPost(req: Request) {
           activeProblem,
           userName,
           90000,
-          sessionLanguage
+          sessionLanguage,
+          undefined,
+          [],
+          sink
         );
         if (platformRes.text) {
           return NextResponse.json({
-            reply: sanitizeZeroAnswer(platformRes.text),
+            reply: finalizeModelReply(platformRes.text, generateSocraticFallbackResponse(message, activeProblem), { targetVariable }),
             model: platformRes.modelUsed || platformModel,
             source: "platform-llm",
           });
@@ -1548,33 +1543,136 @@ async function handleChatPost(req: Request) {
 }
 
 /**
- * Wrapper POST publik: menjalankan handler chat, lalu menyisipkan
- * corpus_references (referensi korpus dari agent harness) ke respons JSON
- * yang memuat balasan, agar UI dapat menampilkan sitasi "Sumber & acuan".
+ * Wrapper POST publik.
+ *
+ * Dua mode:
+ * - **Streaming** (`body.stream === true`): balasan dikirim sebagai SSE
+ *   (`event: delta` per potongan teks, lalu `event: done` berisi JSON final
+ *   yang sudah lolos guardrail). Ini menghilangkan persepsi "membeku" saat
+ *   provider butuh 5-40 detik.
+ * - **Non-streaming**: perilaku lama — satu JSON utuh, dengan
+ *   `corpus_references` disisipkan agar UI menampilkan "Sumber & acuan".
+ *
+ * Potongan teks di mode streaming tetap disanitasi per batas kalimat/baris
+ * sebelum dikirim, dan teks final pada `done` adalah sumber kebenaran (klien
+ * mengganti isi gelembung dengan teks final tersebut).
  */
 export async function POST(req: Request) {
-  const res = await handleChatPost(req);
-  const refs = corpusRefsByRequest.get(req);
-  if (!refs || refs.length === 0) return res;
+  let body: ChatRequestBody | null = null;
   try {
-    const data = await res.clone().json();
-    if (
-      data &&
-      typeof data === "object" &&
-      typeof (data as { reply?: unknown }).reply === "string" &&
-      !("corpus_references" in data)
-    ) {
-      const headers = new Headers(res.headers);
-      headers.delete("content-length");
-      return NextResponse.json(
-        { ...(data as Record<string, unknown>), corpus_references: refs },
-        { status: res.status, headers }
-      );
-    }
+    body = (await req.json()) as ChatRequestBody;
   } catch {
-    // Respons non-JSON: teruskan apa adanya
+    body = null;
   }
-  return res;
+
+  const wantsStream = Boolean(body && (body as ChatRequestBody & { stream?: boolean }).stream);
+
+  if (!wantsStream || !body) {
+    const res = await handleChatPost(req, body ?? undefined);
+    const refs = corpusRefsByRequest.get(req);
+    if (!refs || refs.length === 0) return res;
+    try {
+      const data = await res.clone().json();
+      if (
+        data &&
+        typeof data === "object" &&
+        typeof (data as { reply?: unknown }).reply === "string" &&
+        !("corpus_references" in data)
+      ) {
+        const headers = new Headers(res.headers);
+        headers.delete("content-length");
+        return NextResponse.json(
+          { ...(data as Record<string, unknown>), corpus_references: refs },
+          { status: res.status, headers }
+        );
+      }
+    } catch {
+      // Respons non-JSON: teruskan apa adanya
+    }
+    return res;
+  }
+
+  const encoder = new TextEncoder();
+  const targetVariable =
+    String(body.targetVariable || body.targetVar || "x").trim().slice(0, 4) || "x";
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let closed = false;
+      const send = (event: string, data: unknown) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          closed = true;
+        }
+      };
+
+      // Buffer anti-potong: hanya lepas teks pada batas baris/kalimat supaya
+      // pola jawaban (`x = 4`, `$$...$$`) tidak terbelah antar potongan.
+      let buffer = "";
+      const flush = (force: boolean) => {
+        if (!buffer) return;
+        let cut = -1;
+        for (const sep of ["\n", ". ", "! ", "? ", "；", "; "]) {
+          const idx = buffer.lastIndexOf(sep);
+          if (idx > cut) cut = idx + sep.length;
+        }
+        if (force) cut = buffer.length;
+        // Tahan ~48 karakter terakhir agar pola pendek tetap utuh.
+        if (!force && (cut <= 0 || buffer.length - cut < 48)) return;
+        const chunk = buffer.slice(0, cut);
+        buffer = buffer.slice(cut);
+        if (!chunk) return;
+        send("delta", { t: sanitizeZeroAnswer(chunk, { targetVariable }) });
+      };
+
+      const sink: DeltaSink = (chunk) => {
+        if (typeof chunk !== "string" || !chunk) return;
+        buffer += chunk;
+        // Jangan biarkan buffer tumbuh tanpa batas bila model mengirim paragraf
+        // panjang tanpa baris baru.
+        if (buffer.length > 600) flush(true);
+        else flush(false);
+      };
+
+      try {
+        send("meta", { targetVariable });
+        const res = await handleChatPost(req, body, sink);
+        flush(true);
+        let payload: Record<string, unknown> | null = null;
+        try {
+          payload = (await res.json()) as Record<string, unknown>;
+        } catch {
+          payload = null;
+        }
+        const refs = corpusRefsByRequest.get(req);
+        if (payload && refs && refs.length > 0 && !("corpus_references" in payload)) {
+          payload = { ...payload, corpus_references: refs };
+        }
+        send("done", payload ?? { error: "Respons tidak valid" });
+      } catch (err) {
+        flush(true);
+        send("error", { message: err instanceof Error ? err.message : String(err) });
+      } finally {
+        closed = true;
+        try {
+          controller.close();
+        } catch {}
+      }
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store, no-transform",
+      Connection: "keep-alive",
+      // Cegah buffering di reverse proxy (nginx) agar token langsung sampai.
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
 
 // Cache nama model resmi yang terbukti sukses dan aktif di akun API Key ini
@@ -2102,7 +2200,8 @@ async function callOpenAIAPI(
   modelId?: string,
   userName?: string,
   sessionLanguage: string = "Bahasa Indonesia",
-  images: AttachedImageItem[] = []
+  images: AttachedImageItem[] = [],
+  onDelta?: DeltaSink
 ): Promise<UniversalCallResult> {
   const studentName = userName?.trim() || "Siswa";
   const targetModel = modelId === "gpt-4o-mini" ? "gpt-4o-mini" : "gpt-4o";
@@ -2151,15 +2250,24 @@ async function callOpenAIAPI(
         messages: messages,
         temperature: 0.7,
         max_tokens: 800,
+        ...(onDelta ? { stream: true } : {}),
       }),
       signal: AbortSignal.timeout(10000),
     });
 
     if (res.ok) {
-      const data = await res.json();
-      const text = data?.choices?.[0]?.message?.content;
-      if (text) {
-        return { text, modelUsed: targetModel.toUpperCase() };
+      const contentType = res.headers.get("content-type") || "";
+      if (onDelta && res.body && contentType.includes("event-stream")) {
+        const streamed = await consumeOpenAICompatibleStream(res, onDelta);
+        if (streamed.trim()) {
+          return { text: streamed, modelUsed: targetModel.toUpperCase() };
+        }
+      } else {
+        const data = await res.json();
+        const text = data?.choices?.[0]?.message?.content;
+        if (text) {
+          return { text, modelUsed: targetModel.toUpperCase() };
+        }
       }
     }
 
@@ -2188,7 +2296,8 @@ async function callCustomOpenAIAPI(
   timeoutMs: number = 12000,
   sessionLanguage: string = "Bahasa Indonesia",
   displayName?: string,
-  images: AttachedImageItem[] = []
+  images: AttachedImageItem[] = [],
+  onDelta?: DeltaSink
 ): Promise<UniversalCallResult> {
   const studentName = userName?.trim() || "Siswa";
   const cleanBase = (baseUrl || "http://localhost:11434/v1").replace(/\/+$/, "");
@@ -2240,11 +2349,24 @@ async function callCustomOpenAIAPI(
         messages,
         temperature: 0.6,
         max_tokens: 3000,
+        ...(onDelta ? { stream: true } : {}),
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (res.ok) {
+      // Jalur streaming: server mengirim SSE per token. Bila endpoint tidak
+      // mendukung, `res.body`/content-type tidak akan cocok dan kita jatuh ke
+      // pembacaan JSON biasa di bawah.
+      const contentType = res.headers.get("content-type") || "";
+      if (onDelta && res.body && contentType.includes("event-stream")) {
+        const streamed = await consumeOpenAICompatibleStream(res, onDelta);
+        if (streamed.trim()) {
+          return { text: cleanModelResponse(streamed), modelUsed: targetModel };
+        }
+        return { error: "Streaming model kosong", status: 200, modelUsed: targetModel };
+      }
+
       const data = await res.json();
       const choice = data?.choices?.[0];
       const msg = choice?.message;

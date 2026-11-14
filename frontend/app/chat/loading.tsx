@@ -1,50 +1,68 @@
 // Kerangka muat server-rendered untuk /chat: tampil seketika dari HTML awal
 // selagi bundle klien chat dimuat dan dihidrasi, sehingga cat pertama dan
-// LCP tidak menunggu JavaScript. Struktur meniru cangkang aplikasi asli
-// (bilah samping + area percakapan) agar tidak ada pergeseran tata letak.
+// LCP tidak menunggu JavaScript.
+//
+// Geometri di bawah sengaja disamakan dengan cangkang asli
+// (apps/chat/page.tsx): sidebar 256px, tinggi header 44px, kolom percakapan
+// max-w-3xl, composer rounded-3xl. Dengan begitu tidak ada lompatan tata
+// letak saat aplikasi selesai hidrasi.
 export default function ChatLoading() {
   return (
-    <div className="flex h-screen w-full bg-[#faf9f6] text-zinc-900" aria-busy="true" aria-label="Memuat ChatZAP">
-      <aside className="hidden md:flex w-[280px] shrink-0 flex-col border-r border-zinc-200 bg-white/70 p-4">
-        <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-zinc-900 text-white flex items-center justify-center font-serif font-black text-lg">
-            Z
+    <div
+      className="flex h-[100dvh] w-full bg-[#faf9f6] text-[#09090b] overflow-hidden"
+      aria-busy="true"
+      aria-label="Memuat ChatZAP"
+    >
+      {/* Sidebar skeleton — hanya di layar lebar, sama seperti sidebar asli */}
+      <aside className="hidden sm:flex w-[256px] shrink-0 flex-col border-r border-[#e4e4e7] bg-white">
+        <div className="h-12 px-3.5 flex items-center justify-between border-b border-[#f4f4f5]">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-md bg-[#09090b]" />
+            <div className="h-3.5 w-16 rounded bg-[#e4e4e7]" />
           </div>
-          <div>
-            <p className="font-serif font-bold leading-none">ChatZAP</p>
-            <p className="text-[11px] text-zinc-500 mt-1">Tutor Penalaran Sokratik</p>
-          </div>
+          <div className="w-4 h-4 rounded bg-[#f4f4f5]" />
         </div>
-        <div className="mt-6 h-10 rounded-xl bg-zinc-900/90" />
-        <div className="mt-6 space-y-2.5">
-          <div className="h-4 rounded bg-zinc-200/80 w-3/4" />
-          <div className="h-4 rounded bg-zinc-200/60 w-2/3" />
-          <div className="h-4 rounded bg-zinc-200/60 w-4/5" />
-          <div className="h-4 rounded bg-zinc-200/40 w-1/2" />
+        <div className="px-3 py-2.5">
+          <div className="h-[38px] rounded-xl border border-[#e4e4e7] bg-[#faf9f6]" />
+        </div>
+        <div className="px-3 space-y-2 pt-1">
+          <div className="h-8 rounded-lg bg-[#f4f4f5]" />
+        </div>
+        <div className="px-5 pt-5 pb-2 flex items-center justify-between">
+          <div className="h-2.5 w-20 rounded bg-[#e4e4e7]" />
+          <div className="h-3 w-14 rounded bg-[#f4f4f5]" />
+        </div>
+        <div className="px-3 space-y-1.5">
+          <div className="h-9 rounded-xl bg-[#f4f4f5]" />
+          <div className="h-9 rounded-xl bg-[#fafafa]" />
+        </div>
+        <div className="mt-auto p-3 border-t border-[#f4f4f5] flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-full bg-[#f4f4f5]" />
+          <div className="space-y-1.5">
+            <div className="h-2.5 w-16 rounded bg-[#e4e4e7]" />
+            <div className="h-2 w-20 rounded bg-[#f4f4f5]" />
+          </div>
         </div>
       </aside>
+
       <main className="flex-1 flex flex-col min-w-0">
-        <header className="h-14 border-b border-zinc-200 bg-white/70 flex items-center px-4 gap-3">
-          <div className="w-8 h-8 rounded-lg bg-zinc-900 text-white flex items-center justify-center font-serif font-black md:hidden">
-            Z
-          </div>
-          <p className="font-serif font-bold">ChatZAP</p>
-          <span className="text-xs text-zinc-500">Memuat ruang belajarmu…</span>
+        <header className="h-11 px-3.5 flex items-center justify-end gap-2">
+          <div className="h-7 w-24 rounded-lg border border-[#e4e4e7] bg-white" />
+          <div className="h-7 w-7 rounded-lg border border-[#e4e4e7] bg-white" />
+          <div className="h-7 w-7 rounded-lg border border-[#e4e4e7] bg-white" />
         </header>
-        <div className="flex-1 flex items-center justify-center p-6">
-          <div className="max-w-md text-center">
-            <h1 className="font-serif text-3xl sm:text-4xl font-bold tracking-tight">
-              Belajar matematika,
-              <span className="block text-[#7d551f]">dipandu langkah demi langkah.</span>
-            </h1>
-            <p className="mt-4 text-sm text-zinc-600 leading-relaxed">
-              Tutor Sokratik ZAP sedang disiapkan. Kamu akan dipandu menemukan jawabanmu sendiri, bukan diberi contekan.
-            </p>
+
+        <div className="flex-1 flex flex-col justify-center items-center px-4">
+          <div className="flex items-center gap-2.5 mb-3">
+            <div className="w-[22px] h-[22px] rounded-md bg-[#09090b]" />
+            <div className="h-5 w-44 rounded bg-[#e4e4e7]" />
           </div>
+          <div className="h-3 w-64 rounded bg-[#f4f4f5]" />
+          <div className="mt-6 w-full max-w-3xl h-[124px] rounded-3xl border border-[#e4e4e7] bg-white shadow-[0_16px_40px_-12px_rgba(9,9,11,0.08)]" />
         </div>
-        <div className="p-4">
-          <div className="max-w-3xl mx-auto h-14 rounded-2xl border border-zinc-200 bg-white shadow-sm" />
-        </div>
+
+        <div className="h-2" aria-hidden="true" />
+        <span className="sr-only">Memuat ruang belajar…</span>
       </main>
     </div>
   );

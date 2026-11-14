@@ -62,6 +62,46 @@ body {
     --sidebar-border: 240 5.9% 90%;
     --sidebar-ring: 29 43% 59%;
   }
+
+  /* KineticViz — token warna animasi mikro, mengikuti tema light/dark */
+  :root {
+    --kx-accent: #c2410c;
+    --kx-accent-soft: rgba(194, 65, 12, 0.3);
+    --kx-accent-fill: rgba(194, 65, 12, 0.13);
+    --kx-line: #cdb79c;
+    --kx-line-strong: #a98a68;
+    --kx-ink: #5f5146;
+    --kx-ok: #2f7d52;
+    --kx-ok-fill: rgba(47, 125, 82, 0.14);
+    --kx-error: #c0392b;
+    --kx-surface-2: rgba(28, 18, 12, 0.04);
+  }
+  .dark {
+    --kx-accent: #ffb35c;
+    --kx-accent-soft: rgba(255, 179, 92, 0.35);
+    --kx-accent-fill: rgba(255, 179, 92, 0.16);
+    --kx-line: #6b4b33;
+    --kx-line-strong: #7a5a41;
+    --kx-ink: #e9d5bd;
+    --kx-ok: #4ade80;
+    --kx-ok-fill: rgba(74, 222, 128, 0.16);
+    --kx-error: #ef6f61;
+    --kx-surface-2: rgba(255, 247, 236, 0.05);
+  }
+  /* Panel yang selalu gelap (vault, showcase model) memaksa token gelap
+     walau tema halaman sedang terang. */
+  .kx-on-dark {
+    --kx-accent: #ffb35c;
+    --kx-accent-soft: rgba(255, 179, 92, 0.35);
+    --kx-accent-fill: rgba(255, 179, 92, 0.16);
+    --kx-line: #6b4b33;
+    --kx-line-strong: #7a5a41;
+    --kx-ink: #e9d5bd;
+    --kx-ok: #4ade80;
+    --kx-ok-fill: rgba(74, 222, 128, 0.16);
+    --kx-error: #ef6f61;
+    --kx-surface-2: rgba(255, 247, 236, 0.05);
+  }
   .dark {
     --background: 0 0% 3.9%;
     --foreground: 0 0% 98%;
@@ -99,12 +139,81 @@ body {
 }
 
 @layer base {
+  html {
+    color-scheme: light;
+    scroll-behavior: smooth;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    touch-action: manipulation;
+  }
+
+  /* Offscreen content optimization for Lighthouse performance */
+  .cv-auto {
+    content-visibility: auto;
+    contain-intrinsic-size: 1px 700px;
+  }
+
   * {
     @apply border-border;
   }
-  body {
-    @apply bg-background text-foreground;
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
   }
+
+  /* Placeholder bawaan Tailwind (gray-400) hanya ~2.4:1 pada permukaan terang.
+     Naikkan ke zinc-500/zinc-400 agar tetap terbaca di kedua tema; utility
+     `placeholder:text-*` milik komponen tetap menang karena berada di layer utilities. */
+  input::placeholder,
+  textarea::placeholder {
+    color: #71717a;
+    opacity: 1;
+  }
+  .dark input::placeholder,
+  .dark textarea::placeholder {
+    color: #a1a1aa;
+    opacity: 1;
+  }
+
+  /* Visible keyboard focus everywhere, including controls whose component
+     styles suppress the default outline. Mouse users are unaffected because
+     :focus-visible only matches keyboard/assistive focus. */
+  :where(a, button, [role="button"], summary, [tabindex]:not([tabindex="-1"])):focus-visible {
+    outline: 2px solid rgba(196, 149, 106, 0.85);
+    outline-offset: 2px;
+    border-radius: 8px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Chat typography: inline math must read as part of the sentence.
+   KaTeX ships 1.21em, which makes a lone "x" visibly bigger than the body
+   text and breaks the line rhythm in assistant answers.
+--------------------------------------------------------------------------- */
+.katex {
+  font-size: 1.04em;
+}
+
+.katex-display {
+  margin: 0.45em 0;
+}
+
+.katex-display > .katex {
+  font-size: 1.12em;
 }
 
 /* Animated gradient for the logo */
@@ -280,6 +389,103 @@ body {
   scrollbar-width: none;
 }
 
+/* Halaman landing: sembunyikan scrollbar viewport tanpa mematikan scroll. */
+.no-scrollbar-page {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar-page::-webkit-scrollbar {
+  display: none;
+}
+
+/* Pratinjau landing: `backdrop-filter` di dalam kartu yang di-scale/rotate saat
+   scroll memaksa peramban me-raster ulang tiap frame. Latar elemen di pratinjau
+   sudah hampir opak, jadi blur bisa dimatikan tanpa perubahan visual berarti. */
+.zap-preview-chrome :is(
+    .backdrop-blur,
+    .backdrop-blur-sm,
+    .backdrop-blur-md,
+    .backdrop-blur-lg,
+    .backdrop-blur-xl,
+    .backdrop-blur-2xl,
+    .backdrop-blur-3xl,
+    .liquid-glass-popup
+  ) {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Kursor kolaborator pratinjau landing (gaya Figma).
+   Elemen pembungkusnya berukuran penuh papan, jadi translate dalam % bergerak
+   relatif terhadap ukuran papan — bukan ukuran kursor. Hanya transform yang
+   dianimasikan supaya tetap di compositor (tanpa layout/paint per frame). */
+@keyframes zap-cursor-a {
+  0%,
+  100% {
+    transform: translate(14%, 26%);
+  }
+  25% {
+    transform: translate(52%, 34%);
+  }
+  50% {
+    transform: translate(44%, 62%);
+  }
+  75% {
+    transform: translate(22%, 54%);
+  }
+}
+@keyframes zap-cursor-b {
+  0%,
+  100% {
+    transform: translate(66%, 58%);
+  }
+  25% {
+    transform: translate(42%, 48%);
+  }
+  50% {
+    transform: translate(62%, 24%);
+  }
+  75% {
+    transform: translate(78%, 44%);
+  }
+}
+@keyframes zap-cursor-c {
+  0%,
+  100% {
+    transform: translate(32%, 72%);
+  }
+  25% {
+    transform: translate(58%, 66%);
+  }
+  50% {
+    transform: translate(26%, 44%);
+  }
+  75% {
+    transform: translate(48%, 30%);
+  }
+}
+@keyframes zap-cursor-d {
+  0%,
+  100% {
+    transform: translate(74%, 18%);
+  }
+  25% {
+    transform: translate(52%, 50%);
+  }
+  50% {
+    transform: translate(30%, 24%);
+  }
+  75% {
+    transform: translate(66%, 38%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zap-preview-chrome [style*="zap-cursor"] {
+    animation: none !important;
+  }
+}
+
 /* Custom sleek scrollbar & browser surface theming */
 ::selection {
   background-color: rgba(196, 149, 106, 0.24);
@@ -316,10 +522,228 @@ textarea {
   background: rgba(255, 255, 255, 0.28);
 }
 
+/* Transisi tema cadangan (hanya browser tanpa View Transitions API).
+   `zap-theme-fallback` dipasang ~180 ms oleh utils/theme.ts.
+   Sengaja dibatasi:
+   - tanpa `box-shadow`/`fill`/`stroke` (mahal untuk direpaint di setiap frame),
+   - tanpa pseudo-element dan tanpa subtree SVG/canvas/media,
+   agar jumlah node yang ikut bertransisi tetap kecil. */
+@media (prefers-reduced-motion: no-preference) {
+  html.zap-theme-fallback,
+  html.zap-theme-fallback body,
+  html.zap-theme-fallback
+    :where(
+      div, section, article, aside, header, footer, nav, main, p, span, a,
+      button, input, textarea, select, label, li, dt, dd, td, th, tr,
+      h1, h2, h3, h4, h5, h6, blockquote
+    ) {
+    transition-property: background-color, border-color, color !important;
+    transition-duration: 180ms !important;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1) !important;
+    transition-delay: 0s !important;
+  }
+}
+
+/* Radial theme reveal. The new surface paints above the old one while the
+   button-anchored clip-path expands across the viewport. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-old(root) {
+  z-index: 1;
+}
+::view-transition-new(root) {
+  z-index: 9999;
+}
+
+@keyframes data-dash-flow {
+  to {
+    stroke-dashoffset: -64;
+  }
+}
+.animate-data-dash {
+  animation: data-dash-flow 3.2s linear infinite;
+}
+
+@keyframes bar-pulse {
+  0%,
+  100% {
+    transform: scaleY(0.72);
+    opacity: 0.62;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+.data-bar {
+  animation: bar-pulse 2.8s ease-in-out infinite;
+}
+
+@keyframes orbit-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.orbit-spin {
+  animation: orbit-spin 24s linear infinite;
+}
+.orbit-spin-reverse {
+  animation: orbit-spin 18s linear infinite reverse;
+}
+
+/* Hero entrance berbasis CSS: hanya transform (tanpa opacity) agar elemen
+   terbesar tetap dicat bersama HTML awal dan LCP tidak menunggu hidrasi. */
+@keyframes hero-enter {
+  from {
+    transform: translateY(14px);
+  }
+  to {
+    transform: none;
+  }
+}
+.hero-enter {
+  animation: hero-enter 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.hero-enter-2 {
+  animation-delay: 0.08s;
+}
+.hero-enter-3 {
+  animation-delay: 0.16s;
+}
+.hero-enter-4 {
+  animation-delay: 0.24s;
+}
+.hero-enter-5 {
+  animation-delay: 0.3s;
+}
+
+/* KineticViz — rotasi cincin molekul (perspektif, sumbu Y tetap datar) */
+@keyframes kx-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.kx-spin-slow {
+  animation: kx-spin 22s linear infinite;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.pulse-dot {
+  animation: pulse-dot 2.2s ease-in-out infinite;
+}
+
+@keyframes float-y {
+  0%,
+  100% {
+    transform: translateY(0) rotateX(58deg) rotateZ(-30deg);
+  }
+  50% {
+    transform: translateY(-6px) rotateX(58deg) rotateZ(-30deg);
+  }
+}
+.float-y {
+  animation: float-y 5s ease-in-out infinite;
+}
+
+@keyframes cube-spin {
+  from {
+    transform: rotateX(18deg) rotateY(0deg);
+  }
+  to {
+    transform: rotateX(18deg) rotateY(360deg);
+  }
+}
+.cube-spin {
+  animation: cube-spin 16s linear infinite;
+}
+
+@keyframes node-float {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+.node-float {
+  animation: node-float 4.8s ease-in-out infinite;
+}
+
+@keyframes dot-drift {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 28px 28px;
+  }
+}
+.footer-dot-grid {
+  background-image: radial-gradient(rgba(255, 247, 236, 0.16) 0.7px, transparent 0.8px);
+  background-size: 22px 22px;
+  animation: dot-drift 22s linear infinite;
+}
+
+@keyframes marquee-fast {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.animate-marquee-fast {
+  display: flex;
+  width: max-content;
+  will-change: transform;
+  animation: marquee-fast 22s linear infinite;
+}
+.animate-marquee-fast-reverse {
+  display: flex;
+  width: max-content;
+  will-change: transform;
+  animation: marquee-fast 26s linear infinite reverse;
+}
+.marquee-row:hover .animate-marquee-fast,
+.marquee-row:hover .animate-marquee-fast-reverse {
+  animation-play-state: paused;
+}
+
 /* Accessibility: Intentional reduced-motion behavior preserving state feedback (WCAG 2.1 SC 2.3.3) */
 @media (prefers-reduced-motion: reduce) {
   .animate-gradient,
   .animate-search-pulse {
+    animation: none !important;
+  }
+  .animate-marquee-fast,
+  .animate-marquee-fast-reverse,
+  .footer-dot-grid,
+  .animate-data-dash,
+  .data-bar,
+  .orbit-spin,
+  .orbit-spin-reverse,
+  .pulse-dot,
+  .float-y,
+  .cube-spin,
+  .node-float,
+  .kx-spin-slow,
+  .hero-enter {
     animation: none !important;
   }
   /* Marquee ekosistem dan badge hero SENGAJA tetap berjalan: gerakan lambat
@@ -344,5 +768,161 @@ textarea {
   }
   html {
     scroll-behavior: auto !important;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Dokumentasi: tipografi isi bagian
+   Hanya melengkapi kelas inline yang sudah dipakai konten (judul subbagian,
+   tautan, dan daftar) supaya ritme vertikalnya konsisten di semua bagian.
+--------------------------------------------------------------------------- */
+.docs-prose h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1.9rem;
+  letter-spacing: -0.01em;
+  scroll-margin-top: 9rem;
+}
+.docs-prose h3::before {
+  content: "";
+  width: 1.15rem;
+  height: 2px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, #c4956a, rgba(196, 149, 106, 0.25));
+}
+.docs-prose a {
+  color: #a02e1e;
+  text-decoration: underline;
+  text-decoration-color: rgba(160, 46, 30, 0.35);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 150ms ease;
+}
+.docs-prose a:hover {
+  text-decoration-color: currentColor;
+}
+.dark .docs-prose a {
+  color: #ffb35c;
+  text-decoration-color: rgba(255, 179, 92, 0.35);
+}
+.docs-prose ul,
+.docs-prose ol {
+  margin-block: 0.25rem;
+}
+.docs-prose li > p {
+  margin-block: 0.25rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Dokumentasi: panggung visualisasi 3D per bagian
+   Animasi hanya transform/opacity (compositor). Scene dijeda saat offscreen
+   lewat data-paused, dan dimatikan untuk prefers-reduced-motion.
+--------------------------------------------------------------------------- */
+.docs-visual[data-paused="true"] * {
+  animation-play-state: paused !important;
+}
+
+.docs-dot-x {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  height: 6px;
+  width: 6px;
+  margin-top: -3px;
+  border-radius: 9999px;
+  background: #f07a1e;
+  box-shadow: 0 0 10px 3px rgba(240, 122, 30, 0.35);
+  animation: docs-travel-x 2.6s ease-in-out infinite;
+}
+
+@keyframes docs-travel-x {
+  0% {
+    transform: translateX(0);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(var(--travel, 50px));
+    opacity: 0;
+  }
+}
+
+@keyframes docs-packet {
+  0%,
+  8% {
+    transform: translate3d(0, 0, 0) scale(0.6);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  72% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(0, -27px, 78px) scale(1);
+    opacity: 0;
+  }
+}
+
+@keyframes docs-deflect {
+  0%,
+  8% {
+    transform: translate(-44px, -50%);
+    opacity: 0;
+  }
+  24% {
+    transform: translate(0, -50%);
+    opacity: 1;
+  }
+  32% {
+    transform: translate(7px, -50%) rotate(4deg);
+  }
+  42% {
+    transform: translate(0, -50%) rotate(0deg);
+  }
+  62% {
+    transform: translate(0, -50%);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-72px, -50%);
+    opacity: 0;
+  }
+}
+
+@keyframes docs-glow {
+  0%,
+  100% {
+    opacity: 0.5;
+    box-shadow: 0 0 0 0 rgba(240, 122, 30, 0);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 14px 2px rgba(240, 122, 30, 0.32);
+  }
+}
+
+@keyframes docs-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .docs-visual *,
+  .docs-visual {
+    animation: none !important;
   }
 }

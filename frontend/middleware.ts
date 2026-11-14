@@ -6,6 +6,44 @@ import { NextRequest, NextResponse } from "next/server";
 // Keberadaan sesi dibaca dari cookie cermin zap_session yang disetel saat
 // sesi lokal dibuat (lihat lib/session-cookie.ts). Cookie bukan kredensial;
 // gerbang autentikasi di halaman chat tetap berjalan seperti biasa.
+//
+// KEAMANAN: header proksi (X-Forwarded-Host / X-Forwarded-Proto) dikendalikan
+// klien pada beberapa konfigurasi, sehingga nilai mentahnya tidak boleh
+// dipakai apa adanya sebagai tujuan Location (open redirect / header
+// injection). Hanya bentuk host:port dan skema http/https yang diterima, dan
+// host hanya dipercaya bila konsisten dengan header Host (atau terdaftar di
+// ZAP_ALLOWED_HOSTS untuk deployment di belakang reverse proxy).
+const SAFE_HOST = /^[a-z0-9.\-]+(:\d{1,5})?$/i;
+
+const allowedHosts = (process.env.ZAP_ALLOWED_HOSTS || "")
+  .split(",")
+  .map((value) => value.trim().toLowerCase())
+  .filter(Boolean);
+
+function firstHeaderValue(value: string | null): string {
+  return (value || "").split(",")[0].trim();
+}
+
+function resolvePublicHost(req: NextRequest): string {
+  const originHost = req.nextUrl.host;
+  const forwardedHost = firstHeaderValue(req.headers.get("x-forwarded-host"));
+  const directHost = firstHeaderValue(req.headers.get("host"));
+
+  if (allowedHosts.length > 0) {
+    const matched = [forwardedHost, directHost, originHost].find(
+      (candidate) => candidate && allowedHosts.includes(candidate.toLowerCase())
+    );
+    return matched || originHost;
+  }
+
+  if (SAFE_HOST.test(directHost)) {
+    return forwardedHost && forwardedHost.toLowerCase() === directHost.toLowerCase()
+      ? forwardedHost
+      : directHost;
+  }
+  return originHost;
+}
+
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const isChatPath = pathname === "/chat" || pathname.startsWith("/chat/");
@@ -13,10 +51,12 @@ export function middleware(req: NextRequest) {
     // Bangun URL publik dari header proksi: di belakang reverse proxy,
     // nextUrl bisa berisi alamat internal (localhost:port) yang tidak
     // bisa dibuka peramban pengguna.
-    const host =
-      req.headers.get("x-forwarded-host") || req.headers.get("host") || req.nextUrl.host;
+    const host = resolvePublicHost(req);
+    const forwardedProto = (req.headers.get("x-forwarded-proto") || "").trim().toLowerCase();
     const proto =
-      req.headers.get("x-forwarded-proto") || req.nextUrl.protocol.replace(":", "");
+      forwardedProto === "http" || forwardedProto === "https"
+        ? forwardedProto
+        : req.nextUrl.protocol.replace(":", "");
     return NextResponse.redirect(`${proto}://${host}/login`);
   }
   return NextResponse.next();

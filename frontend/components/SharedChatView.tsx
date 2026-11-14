@@ -112,7 +112,7 @@ export default function SharedChatView({ shareId }: { shareId: string }) {
     return (
       <main className="min-h-screen bg-slate-50 dark:bg-[#0d0f12] text-slate-900 dark:text-zinc-100 flex flex-col items-center justify-center p-4">
         <div className="w-12 h-12 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 flex items-center justify-center mb-4 animate-pulse shadow-sm">
-          <ZapLogo className="w-6 h-6 text-sky-600 dark:text-sky-400" />
+          <ZapLogo className="w-6 h-6 text-[#09090b] dark:text-white" />
         </div>
         <p className="text-sm font-medium text-slate-600 dark:text-zinc-400 animate-pulse">
           Memuat riwayat percakapan...
@@ -187,7 +187,7 @@ export default function SharedChatView({ shareId }: { shareId: string }) {
         <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
           <button
             type="button"
-            onClick={toggleTheme}
+            onClick={(event) => toggleTheme(event.currentTarget)}
             aria-label={isDark ? "Aktifkan mode terang" : "Aktifkan mode gelap"}
             title={isDark ? "Mode Terang" : "Mode Gelap"}
             className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-xl text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-zinc-800/60 transition-colors cursor-pointer"

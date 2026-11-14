@@ -4,7 +4,7 @@
 [![Subtheme](https://img.shields.io/badge/Subtheme-Smart_%26_Fun_Education-0D9488?style=for-the-badge)](https://github.com/wakhidpangestu/ZAP)
 [![Kategori](https://img.shields.io/badge/Kategori-Web_Application_(MVP)-2563EB?style=for-the-badge)](https://github.com/wakhidpangestu/ZAP)
 [![License: MIT](https://img.shields.io/badge/License-MIT-38BDF8?style=for-the-badge)](LICENSE)
-[![Pytest Passing](https://img.shields.io/badge/Pytest-68%2F68_Passing-059669?style=for-the-badge)](backend/tests/)
+[![Pytest Passing](https://img.shields.io/badge/Pytest-126%2F126_Passing-059669?style=for-the-badge)](backend/tests/)
 
 > **"Don't give them answers. Project the wonder to discover."**  
 > ZAP adalah platform pembelajaran matematika *Web-First* yang mengubah rumus dan persamaan aljabar menjadi **bangun ruang 3D interaktif secara real-time** (Three.js/WebGL), dipandu oleh **Tutor Sokratik berpagar Zero Answer Policy**, dan diverifikasi kebenaran matematisnya secara deterministik oleh mesin aljabar simbolik (**SymPy**).
@@ -38,8 +38,9 @@ Sesuai ketentuan resmi **Guidebook LOGICODIX 2026 (Bab Submission & Ketentuan RE
 
 ### B. Solusi Inovatif ZAP
 * **Zero Answer Policy (Pedagogi Sokratik Murni):** AI bertindak sebagai guru pembimbing yang **dilarang keras membocorkan angka kunci jawaban akhir**. Sistem memandu menggunakan perancah kognitif (*scaffolding*) berupa pertanyaan pemantik bertahap agar siswa menemukan penalarannya sendiri (*Aha! Moment*).
-* **Dynamic 3D Canvas (Web-First):** Berbasis Three.js/WebGL, persamaan aljabar dan rumus geometri langsung diwujudkan menjadi model 3D hidup yang dapat diputar, diiris, dan diubah parameternya secara *real-time*.
+* **Dynamic 3D Spatial Canvas (Web-First):** Berbasis Three.js/WebGL, persamaan aljabar dan rumus geometri langsung diwujudkan menjadi model 3D hidup yang dapat diputar, diiris, dan diubah parameternya secara *real-time*.
 * **Deterministik via SymPy CAS Shield:** Menjamin 0% halusinasi hitung matematika. Verifikasi aljabar dan koordinat bangun ruang diselesaikan oleh mesin aljabar komputer (CAS), bukan ditebak oleh LLM.
+* **Papan Tulis Pintar Terpadu (Smartboard 2D / 3D / Coretan Kapur):** Tiga kanvas dalam satu ruang kerja dengan **persistensi state lintas tab** (objek 3D, kurva grafik 2D, dan coretan papan tidak hilang saat berpindah tab).
 * **Inklusif & Hardware-Agnostic (Dual-Mode):** Berjalan mulus di **laptop guru yang terhubung ke proyektor gantung InFocus** (Mode Proyektor: kontras tinggi, font besar, tombol ramah clicker) maupun di **Smart Board layar sentuh IFP** (Mode Smart Board: gesture sentuh & stylus).
 
 ### C. Target Pengguna
@@ -56,14 +57,17 @@ Sesuai ketentuan resmi **Guidebook LOGICODIX 2026 (Bab Submission & Ketentuan RE
 | **Cognitive Fault Localization (CFL)** | ✅ Aktif | Verifikasi langkah demi langkah aljabar via SymPy: mendeteksi salah ekspansi kuadrat, kesalahan transposisi ruas, dan kehilangan akar (`ROOT_LOSS`). |
 | **Robust Zero-Answer Guardrail** | ✅ Aktif | Penyaring kebocoran jawaban deklaratif (`x = 2`, `jawaban akhirnya`, angka diagonal ruang) tanpa merusak konteks pertanyaan pemantik Sokrates. |
 | **Dynamic 3D Spatial Canvas** | ✅ Aktif | Galeri bangun ruang parametrik (kubus, prisma, limas, silinder, torus, dsb.), irisan bidang dinamis, dan penjelajah permukaan kalkulus $f(x,y)$ berbasis Three.js WebGL. |
+| **Papan Tulis Pintar 3-in-1 (Persistent)** | ✅ Aktif | Kanvas geometri 3D, plotter kurva 2D, dan coretan kapur interaktif dengan pemulihan state instan saat berpindah tab kanvas. |
+| **Modern Adaptive Dock & Copilot** | ✅ Aktif | Bilah alat (*floating dock*) dengan dukungan gulir horizontal (*overflow scroll*) di layar kecil serta posisi Copilot ergonomis di atas dock. |
+| **Multi-Domain Verified Corpus Synthesis** | ✅ Aktif | Pipa korpus pengetahuan multi-disiplin (Matematika TK–S3, Pemrograman, Fisika, Kimia) dengan verifikasi mesin independen. |
+| **Agent Memory Harness & Flywheel** | ✅ Aktif | Penyimpanan memori episodik agen Sokratik dengan isolasi penuh per-pengguna dan proteksi gerbang rahasia (*secret gate*). |
+| **Dual-Tier Master Vault (AES-256-GCM)** | ✅ Aktif | Enkripsi brankas kunci API dan percakapan di sisi klien (passphrase/biometrik WebAuthn) serta di sisi server menggunakan AES-256-GCM terisolasi. |
 | **Dual-Mode Class Presentation** | ✅ Aktif | Peralihan 1-klik antara **Mode Proyektor Gantung** (skema kontras tinggi, teks bimbingan ekstra besar terbaca dari baris belakang kelas) dan **Mode Smart Board IFP** (*touch targets* ≥ 48px). |
 | **Universal 1-Click Connect (Google SSO)** | ✅ Aktif | Guru & siswa cukup masuk dengan 1-klik akun Google (verifikasi tokeninfo server-side) dan langsung dapat menggunakan Gemini Platform tanpa ribet setup API key. |
 | **Mode Tamu Instan (Guest Access)** | ✅ Aktif | 1-klik langsung masuk ke papan tulis dan percakapan tanpa perlu registrasi maupun memasukkan kata sandi. |
 | **BYOK Multi-Model AI Gateway** | ✅ Aktif | Opsi bagi pengguna/juri untuk menghubungkan kunci API mereka sendiri (OpenAI ChatGPT, Mistral, NVIDIA NIM, BazaarLink) dengan enkripsi sisi server. |
-| **Encrypted Master Vault (AES-256-GCM)** | ✅ Aktif | Penyimpanan kunci API pihak ketiga dan percakapan terenkripsi penuh AES-256-GCM dengan isolasi token per-pengguna dan integritas sidik jari SHA-256. |
-| **Socratic Working Memory** | ✅ Aktif | Penyimpanan otomatis riwayat chat di *local storage* dengan *windowing* pintar (maksimal 20 pesan terakhir) untuk efisiensi token dan konteks nalar yang tajam. |
+| **Developer Documentation Portal (`/docs`)** | ✅ Aktif | Halaman dokumentasi teknis interaktif, snippets multi-bahasa, dan Interactive API Playground langsung di browser. |
 | **Takedown & Right to be Forgotten** | ✅ Aktif | Fitur ekspor data terenkripsi dan penghapusan akun mandiri secara menyeluruh (*GDPR-compliant*). |
-| **Procedural Math Harvester (TK–S3)** | ✅ Aktif | Pipeline kurikulum matematika bertingkat dengan sintesis dataset aljabar deterministik SymPy. |
 
 ---
 
@@ -76,21 +80,24 @@ graph TD
     subgraph Client ["Client Presentation Tier (Next.js 14 + WebGL)"]
         UI_Formula["Formula & LaTeX Ingestion"]
         UI_3D["Dynamic 3D Canvas (Three.js WebGL)"]
+        UI_Smartboard["Smartboard 3-in-1 (3D / 2D / Papan)"]
         UI_DualMode["Dual-Mode Engine (Proyektor / Smartboard)"]
         UI_Console["Socratic Guidance Console"]
-        UI_Memory["Socratic Session Memory (Windowing 20 Pesan)"]
+        UI_Vault["Client-Side Master Vault (WebAuthn / AES-GCM)"]
     end
 
     subgraph Gateway ["API Gateway & Security Tier (FastAPI)"]
         API_Route["/api/v1/diagnose Endpoint"]
         Pre_Parse["Pre-Parse Whitelist & Limiter (Anti-RCE & Anti-DoS)"]
         Guardrail["Robust Zero-Answer Guardrail"]
-        Vault["AES-256-GCM Master Vault"]
+        Server_Vault["AES-256-GCM Server Vault (zapcore)"]
+        Harness_Gate["Agent Harness Memory & Secret Gate"]
     end
 
     subgraph Intelligence ["Deterministic & Pedagogical Engine"]
-        SymPy_CAS["SymPy Symbolic Algebra CAS (Deterministic Truth)"]
+        SymPy_CAS["SymPy Symbolic CAS (Deterministic Truth)"]
         Fault_Classifier["Cognitive Fault Classifier & Counter-Example"]
+        Multi_Corpus["Multi-Domain Engine (Math, Code, Physics, Chemistry)"]
         LLM_Tutor["Socratic Pedagogical Layer (Gemini Platform / BYOK)"]
     end
 
@@ -98,6 +105,8 @@ graph TD
     Pre_Parse -->|Input Lolos Whitelist| SymPy_CAS
     SymPy_CAS -->|Hasil Evaluasi & Titik Akar| Fault_Classifier
     Fault_Classifier -->|Miskonsepsi & Kontra-Contoh| LLM_Tutor
+    Multi_Corpus -->|Pengetahuan Terverifikasi| LLM_Tutor
+    Harness_Gate -->|Konteks Miskonsepsi Masa Lalu| LLM_Tutor
     LLM_Tutor -->|Draf Respon Pembimbing| Guardrail
     Guardrail -->|Pesan Bebas Kunci Jawaban| UI_Console
     SymPy_CAS -->|Koordinat Mesh & Matriks Bidang| UI_3D
@@ -109,46 +118,64 @@ graph TD
 
 | Layer / Kategori | Komponen & Pustaka | Lisensi | Fungsi & Peran |
 | :--- | :--- | :--- | :--- |
-| **Frontend Framework** | Next.js 14 (App Router), React 18, TypeScript | MIT | Arsitektur web modern, SSR/SSG teroptimasi, routing dinamis. |
-| **3D Graphics & Canvas** | Three.js, @react-three/fiber, @react-three/drei | MIT | Mesin visualisasi WebGL 3D, kontrol orbit kamera, pencahayaan panggung. |
-| **UI Styling & Icons** | Tailwind CSS v3, Lucide React | MIT / ISC | Desain responsif, tema gelap/terang, tipografi matematika presisi. |
-| **Mathematical Typesetting** | KaTeX, katex/dist/katex.min.css | MIT | Rendering persamaan LaTeX kilat di sisi peramban. |
-| **Backend Framework** | FastAPI 0.162, Uvicorn, Python 3.15 | MIT / BSD | Microservice asynchronous berperforma tinggi dengan validasi schema Pydantic. |
+| **Frontend Framework** | Next.js 14 (App Router), React 18, TypeScript 5 | MIT | Arsitektur web modern, SSR/SSG teroptimasi, routing dinamis. |
+| **3D Graphics & Canvas** | Three.js 0.187, WebGL, Canvas 2D | MIT | Mesin visualisasi WebGL 3D, kontrol orbit kamera, irisan bangun ruang, dan kurva 2D. |
+| **UI Styling & Motion** | Tailwind CSS v3, Framer Motion, GSAP 3.15, Lucide React | MIT / ISC | Desain responsif, docking bar animasi halus, tema gelap/terang, tipografi matematika presisi. |
+| **Mathematical Typesetting** | KaTeX 0.19, react-katex | MIT | Rendering persamaan LaTeX kilat di sisi peramban. |
+| **Backend Framework** | FastAPI 0.162, Uvicorn, Python 3.15 | MIT / BSD | Microservice asynchronous berperforma tinggi dengan validasi schema Pydantic v2. |
 | **Computer Algebra (CAS)** | SymPy 1.14.0, mpmath, antlr4-python3 | BSD-3-Clause | Arbiter tunggal kebenaran matematika, pemecah persamaan, dan kalkulator kontra-contoh. |
-| **Keamanan & Kriptografi** | Cryptography 50.0.2 (AES-256-GCM, SHA-256) | Apache / BSD | Enkripsi brankas kredensial pengguna dan perlindungan privasi. |
+| **Keamanan & Kriptografi** | Cryptography 50.0.2 (AES-256-GCM, SHA-256) | Apache / BSD | Enkripsi brankas kredensial pengguna, isolasi memori, dan perlindungan privasi. |
 | **Testing Framework** | Pytest 9.2.0, AnyIO, Starlette TestClient | MIT | Pengujian regresi otomatis, audit parser, dan simulasi serangan injeksi. |
-| **Database & Cache** | SQLite 3 (`zap_platform.db` & `zap_math_corpus.db`), LocalStorage | Public Domain | Penyimpanan pengguna terenkripsi, korpus materi ajar, dan sesi kerja lokal. |
+| **Database & Cache** | SQLite 3 (`zap_platform.db` & `zap_math_corpus.db`), LocalStorage | Public Domain | Penyimpanan pengguna terenkripsi, korpus materi ajar, memori episodik, dan sesi kerja. |
 | **Layanan AI Eksternal** | Google Gemini (2.0 Flash / 1.5 Flash), OpenAI, Mistral | Komersial API | Dialog pembimbing Sokratik berbasis arahan terstruktur. |
 
 ---
 
-## 🧪 6. Hasil Uji Otomatis (Pytest 65/65 Verified)
+## 🧪 6. Hasil Uji Otomatis (Pytest 126/126 Verified)
 
-Seluruh logika aljabar, pertahanan injeksi kode, pembatasan DoS, dan sistem platform telah diverifikasi melalui **65 unit test otomatis**:
+Seluruh logika aljabar deterministik, pertahanan injeksi kode, batas eksponen DoS, isolasi memori agen, sintesis korpus multi-domain, dan keamanan platform telah diverifikasi melalui **126 unit test otomatis (100% lulus)**:
 
 ```powershell
-# Menjalankan seluruh pengujian (65/65 lolos)
-python -m pytest -v -p no:cacheprovider tests/ backend/tests_platform/
-============================= 65 passed in 2.15s ==============================
+# Menjalankan seluruh pengujian (126/126 lolos)
+python -m pytest -v -p no:cacheprovider tests/ tests_platform/
+============================= 126 passed in 5.40s =============================
 ```
 
 ### Rincian Modul Pengujian:
-1. **Core Symbolic Reasoning (`backend/tests/` — 23 Tests Lolos):**
-   * ✅ Verifikasi ekspansi kuadrat patah: $(x+3)^2 - 4 \rightarrow x^2 + 5$ mendeteksi hilangnya suku perkalian silang ($21 \neq 9$).
-   * ✅ Validasi pemindahan ruas persamaan linear ($2x+3=7 \rightarrow 2x=4 \rightarrow x=2$).
-   * ✅ Deteksi galat tanda saat transposisi suku aljabar ($2x+3=7 \rightarrow 2x=10$).
-   * ✅ Deteksi kehilangan akar (`ROOT_LOSS`) pada persamaan kuadrat ($x^2 = 4 \rightarrow x = 2$).
-   * ✅ Penanganan `ConditionSet` transendental $\sin(x) = x$ secara aman (`UNDECIDABLE_STEP`).
-   * ✅ **Anti-RCE Whitelist Security:** Memblokir injeksi Python (`__import__`, `eval`, `open`, `__builtins__`) sebelum menyentuh parser SymPy.
-   * ✅ **Anti-LaTeX Exploit:** Menolak perintah eksekusi berbahaya seperti `\input{/etc/passwd}` dan `\write18{echo hi}`.
-   * ✅ **Anti-DoS Exponential Limiter:** Menolak kiriman pangkat bertingkat raksasa ($9^{9^9}$, $(9^9)^9$, $2^{100000000000}$) dalam sub-milidetik (< 1 ms).
-   * ✅ **Zero-Answer Guardrail:** Menyaring pernyataan deklaratif jawaban akhir (`x = 2`, `diagonal ruang = 17.32 cm`) tanpa merusak kalimat pembimbing Sokratik.
-2. **Platform Security, Auth & Vault (`backend/tests_platform/` — 42 Tests Lolos):**
-   * ✅ Verifikasi token Google SSO server-side (memeriksa audiens, masa berlaku, dan `email_verified`).
-   * ✅ Enkripsi master vault roundtrip AES-256-GCM dan isolasi brankas per-pengguna.
-   * ✅ Gateway multi-model (Gemini, OpenAI, Anthropic via BYOK) dengan penanganan fallback.
-   * ✅ Pipa kurasi self-learning dengan persetujuan eksplisit dan penyaringan PII (NIK/Email).
-   * ✅ Ekspor data terenkripsi dan penghapusan menyeluruh (*Right to be Forgotten*).
+
+#### 1. Core Symbolic Reasoning, Harvester & Memory Isolation (`backend/tests/` — 84 Tests Lolos):
+* ✅ **Cognitive Fault Localization:**
+  * Verifikasi ekspansi kuadrat patah: $(x+3)^2 - 4 \rightarrow x^2 + 5$ mendeteksi hilangnya suku perkalian silang ($21 \neq 9$).
+  * Validasi pemindahan ruas persamaan linear ($2x+3=7 \rightarrow 2x=4 \rightarrow x=2$).
+  * Deteksi galat tanda saat transposisi suku aljabar ($2x+3=7 \rightarrow 2x=10$).
+  * Deteksi kehilangan akar (`ROOT_LOSS`) pada persamaan kuadrat ($x^2 = 4 \rightarrow x = 2$).
+  * Penanganan `ConditionSet` transendental $\sin(x) = x$ secara aman (`UNDECIDABLE_STEP`).
+* ✅ **Anti-RCE Whitelist Security:**
+  * Memblokir injeksi kode Python (`__import__`, `eval`, `open`, `__builtins__`) pada tahap pra-parsing sebelum menyentuh fungsi `parse_expr` SymPy.
+* ✅ **Anti-LaTeX Exploit:**
+  * Menolak perintah eksekusi berbahaya seperti `\input{/etc/passwd}` dan `\write18{echo hi}`.
+* ✅ **Anti-DoS Exponential Limiter:**
+  * Menolak kiriman pangkat bertingkat raksasa ($9^{9^9}$, $(9^9)^9$, $2^{100000000000}$) dengan ambang batas eksponen $\le 100$ dalam sub-milidetik (< 1 ms).
+* ✅ **Zero-Answer Guardrail:**
+  * Menyaring pernyataan deklaratif jawaban akhir (`x = 2`, `jawaban akhirnya`, angka diagonal ruang) tanpa merusak kalimat pembimbing Sokratik.
+* ✅ **Multi-Domain Machine-Verified Corpus:**
+  * Menjamin tidak ada kebocoran jawaban akhir pada pertanyaan, bimbingan Sokratik, maupun petunjuk untuk subtopik Pemrograman, Fisika, dan Kimia.
+  * Sandbox eksekusi kode pemrograman aman dari masukan berbahaya.
+* ✅ **Agent Memory Harness & Isolation:**
+  * Isolasi data pembelajaran per-pengguna (Pengguna B tidak pernah dapat melihat riwayat memori Pengguna A).
+  * Proteksi endpoint statistik dan pembelajaran melalui *secret gate*.
+  * Sinkronisasi transaksi paralel SQLite dan *jsonl mirror* tanpa kehilangan baris.
+
+#### 2. Platform Security, Auth SSO & Vault (`backend/tests_platform/` — 42 Tests Lolos):
+* ✅ **Autentikasi Google SSO Server-Side:**
+  * Verifikasi tanda tangan token Google (memeriksa audiens, masa berlaku, dan status `email_verified`).
+* ✅ **Master Vault AES-256-GCM:**
+  * Enkripsi roundtrip kunci API pihak ketiga dengan garam acak 12-byte IV dan isolasi per-pengguna.
+* ✅ **Multi-Model Gateway:**
+  * Perutean permintaan ke Gemini Platform, OpenAI, Mistral, atau Anthropic (via BYOK) dengan penanganan kegagalan (*failover*).
+* ✅ **Privasi & Kebijakan Data:**
+  * Filter PII (NIK ditolak seketika, alamat email disanitasi).
+  * Ekspor data terenkripsi dan penghapusan menyeluruh (*Right to be Forgotten*).
 
 ---
 
@@ -184,7 +211,7 @@ python -m venv venv
 .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-# Jalankan pengujian verifikasi (68 tests)
+# Jalankan seluruh pengujian verifikasi (126 tests)
 python -m pytest -v -p no:cacheprovider tests/ tests_platform/
 
 # Jalankan layanan backend CFL (Port 8000)
@@ -214,13 +241,16 @@ Sesuai instruksi Buku Panduan (Halaman 17 & 20), berikut adalah parameter konfig
 
 | Variabel | Lingkup | Deskripsi | Nilai Default / Contoh |
 | :--- | :--- | :--- | :--- |
-| `NEXT_PUBLIC_BACKEND_URL` | Frontend | URL endpoint backend microservice ZAP | `http://127.0.0.1:8000` |
+| `NEXT_PUBLIC_BACKEND_URL` | Frontend | URL endpoint backend microservice ZAP | `http://127.0.0.1:8000` *(atau endpoint produksi)* |
 | `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | Frontend | Client ID Google Identity Services untuk SSO web | `[your_google_client_id].apps.googleusercontent.com` |
 | `ZAP_GOOGLE_CLIENT_ID` | Backend | Client ID OAuth Google untuk verifikasi server-side token | `[your_google_client_id].apps.googleusercontent.com` |
+| `ZAP_GOOGLE_CLIENT_SECRET` | Backend | Client Secret OAuth Google | `your_google_client_secret` |
 | `ZAP_JWT_SECRET` | Backend | Kunci rahasia penanda tangan sesi JWT | `your_jwt_secret_key_change_me` |
 | `ZAP_MASTER_SECRET` | Backend | Passphrase master enkripsi AES-256-GCM vault | `your_master_secret_passphrase` |
 | `ZAP_GEMINI_API_KEY` | Backend | Kunci API Gemini milik server platform | `your_platform_gemini_api_key` |
 | `ZAP_DB_PATH` | Backend | Lokasi berkas SQLite basis data pengguna & platform | `zap_platform.db` |
+| `ZAP_SESSION_DAYS` | Backend | Masa berlaku token sesi pengguna (hari) | `7` |
+| `ZAP_RETENTION_DAYS` | Backend | Periode retensi data sebelum pembersihan otomatis | `365` |
 | `BAZAARLINK_API_KEY` | Frontend (Opsional) | Kunci API opsional untuk connector BazaarLink | *(Kosongkan bila tidak digunakan)* |
 | `MISTRAL_API_KEY` | Frontend (Opsional) | Kunci API opsional untuk connector Mistral AI | *(Kosongkan bila tidak digunakan)* |
 | `NVIDIA_API_KEY` | Frontend (Opsional) | Kunci API opsional untuk connector NVIDIA NIM | *(Kosongkan bila tidak digunakan)* |
@@ -281,8 +311,8 @@ Sesuai regulasi Buku Panduan (Halaman 16 & 20), seluruh pustaka, template, aset,
 4. **Antarmuka & Ikonografi:** [Tailwind CSS](https://tailwindcss.com/) oleh Tailwind Labs (Lisensi MIT), [Lucide Icons](https://lucide.dev/) oleh Lucide Contributors (Lisensi ISC).
 5. **Tipografi Matematika:** [KaTeX](https://katex.org/) oleh Khan Academy (Lisensi MIT).
 6. **Autentikasi & Layanan Cloud:** [Google Identity Services SDK](https://developers.google.com/identity) oleh Google LLC.
-7. **Dataset Matematika Terbuka:** [GSM8K Benchmark](https://github.com/openai/grade-school-math) oleh OpenAI (Lisensi MIT) untuk acuan taksonomi aljabar di modul `data_engine`.
-8. **Orisinalitas Logika Inti:** Algoritma *Cognitive Fault Localization (CFL)*, parser whitelist anti-RCE, pembatas eksponen anti-DoS, pelindung Zero-Answer Guardrail, galeri bangun ruang parametrik 3D, dan arsitektur brankas token AES-256-GCM merupakan **karya orisinal yang dirancang dan dikembangkan sendiri oleh tim `unindra_coders`**.
+7. **Dataset Terbuka:** [GSM8K Benchmark](https://github.com/openai/grade-school-math) oleh OpenAI (Lisensi MIT) untuk acuan taksonomi aljabar di modul `data_engine`.
+8. **Orisinalitas Logika Inti:** Algoritma *Cognitive Fault Localization (CFL)*, parser whitelist anti-RCE, pembatas eksponen anti-DoS, pelindung Zero-Answer Guardrail, Papan Tulis Pintar 3-in-1 berpersistensi state, galeri bangun ruang parametrik 3D, dan arsitektur brankas ganda AES-256-GCM merupakan **karya orisinal yang dirancang dan dikembangkan sendiri oleh tim `unindra_coders`**.
 
 ---
 
@@ -291,13 +321,14 @@ Sesuai regulasi Buku Panduan (Halaman 16 & 20), seluruh pustaka, template, aset,
 ```text
 logicodix/
 ├── .agents/skills/           # Unified AI Agent Skill & Harness untuk otomasi & upgrade ZAP
-│   └── zap-skills/           # Master Skill: Agent Memory Harness, Web Crawler, Training & Verification (68/68 Pytest)
+│   └── zap-skills/           # Master Skill: Agent Memory Harness, Web Crawler, Multi-Domain Synthesis
 ├── .codex/                   # Codex assistant configurations
+├── assets/                   # Aset grafis visual & maskot resmi ZAP
 ├── backend/                  # Layanan Backend FastAPI & SymPy Reasoning CAS
 │   ├── cfl/                  # Core Cognitive Fault Localization (Parser, Classifier, Guardrail)
-│   ├── data_engine/          # Agent Memory Harness, Internet Crawler & Kurikulum (TK–S3)
+│   ├── data_engine/          # Agent Memory Harness, Multi-Domain Corpus & Kurikulum (TK–S3)
 │   ├── zapcore/              # Auth SSO, AES-256-GCM Vault, Multi-Model Gateway, Privacy
-│   ├── tests/                # 26 Automated Tests: verifikasi aljabar, keamanan parser & agent harness
+│   ├── tests/                # 84 Automated Tests: verifikasi aljabar, anti-RCE, DoS, multi-domain, memory
 │   ├── tests_platform/       # 42 Automated Tests: auth tokeninfo, vault crypto & privasi
 │   ├── main.py               # Titik masuk Microservice CFL Engine (Port 8000)
 │   ├── platform_main.py      # Titik masuk Zapcore Platform Services (Port 8001)
@@ -306,32 +337,36 @@ logicodix/
 ├── data/                     # Basis data geometri parametrik, memori agen & korpus matematika
 │   ├── zap_agent_memory.jsonl     # Memori episodik pembelajaran percakapan agen ZAP
 │   ├── zap_geometry_database.json # Katalog bangun ruang, sudut, rusuk, & rumus
-│   └── zap_math_corpus.jsonl      # Korpus aljabar & teorema terverifikasi (TK hingga S3)
+│   ├── zap_math_corpus.jsonl      # Korpus aljabar & teorema terverifikasi (TK hingga S3)
+│   └── harvest_state.json         # Metadata statistik proses kurasi & verifikasi data
 ├── docs/                     # Dokumentasi arsitektur, spesifikasi teknis, & blueprint resmi
 │   ├── README.md             # Indeks utama seluruh dokumentasi teknis
 │   ├── ARCHITECTURE.md       # Arsitektur sistem & diagram data flow
 │   ├── ALGORITHM.md          # Spesifikasi matematika simbolik CFL & mitigasi DoS
 │   ├── BACKEND_SYSTEM.md     # Desain sistem backend, auth Google, & vault kriptografi
-│   ├── DESIGN_SYSTEM.md      # UI/UX design tokens & spesifikasi Dual-Mode
 │   ├── DATA_AND_LEARNING_POLICY.md # Kebijakan kurasi data & hak privasi
+│   ├── DEPLOYMENT_GUIDE.md   # Panduan deployment produksi, Docker, SSL & environment
+│   ├── DESIGN_SYSTEM.md      # UI/UX design tokens & spesifikasi Dual-Mode
 │   ├── PRIVACY_POLICY.md     # Kebijakan privasi resmi platform ZAP
 │   ├── TERMS_OF_SERVICE.md   # Ketentuan penggunaan layanan edukasi
 │   ├── ZAP_Product_Blueprint.pdf   # Blueprint produk resmi 4 halaman (Light Mode Minimalis)
 │   └── ZAP_Product_Blueprint.html  # Edisi web interaktif dokumen blueprint
 ├── frontend/                 # Aplikasi Web Next.js 14 + Tailwind CSS + Three.js
-│   ├── app/                  # App Router (Halaman Chat, Connector, Login, Unban)
-│   ├── components/           # Komponen UI, Kanvas 3D Interaktif, MathView, ModelPicker
+│   ├── app/                  # App Router (Halaman Chat, Connector, Login, Docs, Unban)
+│   ├── components/           # Komponen UI, Kanvas 3D Interaktif, MathView, ModelPicker, Dock
+│   ├── data/                 # Basis data geometri sisi klien untuk kalkulasi kanvas cepat
 │   ├── utils/                # Sinkronisasi akun, chat memory windowing & enkripsi lokal
 │   ├── .env.example          # Template konfigurasi variabel lingkungan frontend
 │   └── package.json          # Dependensi produksi Node.js
-├── scripts/                  # Skrip otomasi, regenerasi korpus, & generator dokumen
+├── scripts/                  # Skrip otomasi korpus matematika & generator dokumen
 │   ├── fetch_math_data.py    # Generator & harvester korpus matematika
 │   └── generate_blueprint_pdf.py # Generator PDF blueprint resmi 4 halaman
 ├── tests/                    # Forwarder pytest root (eksekusi pytest langsung dari root)
-├── trash/                    # Arsip lokal berkas usang & dokumen privat (diabaikan Git)
+├── trash/                    # Arsip lokal berkas usang & dokumen audit (diabaikan Git)
 ├── .env.example              # Template variabel lingkungan utama repositori
-├── .gitignore                # Aturan pengecualian berkas sistem, trash & kredensial
+├── .gitignore                # Aturan pengecualian berkas sistem, trash, database & kredensial
 ├── AGENTS.md                 # Kontrak operasional agen AI & memori teruji sistem
+├── docker-compose.yml        # Konfigurasi container orkestrasi backend & frontend
 └── README.md                 # Dokumentasi utama repositori resmi LOGICODIX 2026
 ```
 

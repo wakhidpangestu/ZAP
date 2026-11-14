@@ -1,31 +1,36 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
   ArrowRight,
+  BookOpen,
   Check,
   CheckCircle2,
-  ChevronDown,
-  ChevronLeft,
-  ChevronUp,
   ExternalLink,
   Eye,
   EyeOff,
   Key,
   Loader2,
-  Moon,
   ShieldCheck,
-  Sparkles,
-  Sun,
   Trash2,
+  X,
   XCircle,
   Zap,
 } from "lucide-react";
-import ZapLogo from "@/components/ZapLogo";
+import { SiteHeader } from "@/components/site/SiteHeader";
+import { SiteFooter } from "@/components/site/SiteFooter";
+import { type ZAPUser } from "@/components/GoogleAuthButton";
 import { syncAccountBackup, restoreAccountData } from "@/utils/account-sync";
-import { useTheme } from "@/utils/theme";
+import {
+  getProviderKey,
+  setProviderKey,
+  getProviderSetting,
+  setProviderSetting,
+  migrateLegacyProviderKeys,
+  type ProviderId,
+} from "@/utils/provider-keys";
+import { AVAILABLE_MODELS } from "@/components/ModelPickerWithEffort";
 import { LocalEnclaveEmblem } from "@/components/PlatformIcons";
 import {
   GeminiLogo,
@@ -37,7 +42,6 @@ import {
   SymPyLogo,
   MistralLogo,
 } from "@/components/CompanyLogos";
-import { AVAILABLE_MODELS } from "@/components/ModelPickerWithEffort";
 
 interface ProviderConfig {
   id: string;
@@ -46,7 +50,6 @@ interface ProviderConfig {
   icon: React.ElementType;
   badge: string;
   modelId: string;
-  storageKey: string;
   docUrl: string;
   docLabel: string;
   keyPrefix: string;
@@ -54,6 +57,34 @@ interface ProviderConfig {
   tutorialSteps: string[];
   note?: string;
   isCustom?: boolean;
+  tint?: string;
+}
+
+/**
+ * Pemetaan id kartu di halaman ini → id provider di utils/provider-keys.ts.
+ * Kartu "deepseek" memakai kunci BazaarLink (kunci yang sama dengan DeepSeek).
+ */
+const PROVIDER_KEY_IDS: Record<string, ProviderId> = {
+  gemini: "gemini",
+  openai: "openai",
+  deepseek: "bazaarlink",
+  claude: "claude",
+  nvidia: "nvidia",
+  mistral: "mistral",
+  custom: "custom",
+};
+
+/** Pola pembacaan user yang sudah dipakai halaman ini: cache `zap_authenticated_user`. */
+function readStoredUser(): ZAPUser | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem("zap_authenticated_user");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as ZAPUser) : null;
+  } catch {
+    return null;
+  }
 }
 
 const PROVIDERS: ProviderConfig[] = [
@@ -62,116 +93,111 @@ const PROVIDERS: ProviderConfig[] = [
     name: "Google Gemini AI",
     shortDesc: "Model bawaan default ChatZAP dari Google DeepMind dengan konteks 1M token.",
     icon: GeminiLogo,
-    badge: "Bawaan Server / BYOK",
+    badge: "Default / BYOK",
+    tint: "bg-blue-500/10 dark:bg-blue-500/15 border-blue-500/25",
     modelId: "gemini-2.0-flash",
-    storageKey: "zap_gemini_api_key",
     docUrl: "https://aistudio.google.com/app/apikey",
     docLabel: "aistudio.google.com",
     keyPrefix: "AIzaSy...",
-    placeholder: "Masukkan Google AI Studio Key (AIzaSy...)",
-    note: "Akun Google yang login otomatis terhubung ke pool server ZAP. Menambahkan API key pribadi di bawah ini opsional untuk kuota tak terbatas dan prioritas latensi.",
+    placeholder: "AIzaSy... (Google AI Studio Key)",
+    note: "Akun Google yang login otomatis terhubung ke pool server ZAP. Menambahkan API key pribadi bersifat opsional untuk kuota pribadi dan prioritas latensi.",
     tutorialSteps: [
       "Buka Google AI Studio di browser Anda (aistudio.google.com/app/apikey).",
       "Login menggunakan akun Google Anda.",
       "Klik tombol 'Create API key' dan pilih proyek Google Cloud Anda (atau buat baru).",
       "Salin kunci API yang diawali dengan huruf 'AIzaSy...'.",
-      "Tempelkan kunci pada kolom di bawah ini lalu klik 'Simpan & Uji Koneksi'.",
+      "Tempelkan kunci pada kolom input lalu klik 'Simpan'.",
     ],
   },
   {
     id: "openai",
     name: "OpenAI ChatGPT",
-    shortDesc: "Akses model penalaran multimodal GPT-4o dan versi ultra-ringan GPT-4o Mini.",
+    shortDesc: "Akses model penalaran multimodal GPT-4o dan versi cepat GPT-4o Mini.",
     icon: OpenAILogo,
-    badge: "GPT-4o & GPT-4o Mini",
+    badge: "GPT-4o",
+    tint: "bg-emerald-500/10 dark:bg-emerald-500/15 border-emerald-500/25",
     modelId: "gpt-4o",
-    storageKey: "zap_openai_api_key",
     docUrl: "https://platform.openai.com/api-keys",
     docLabel: "platform.openai.com",
-    keyPrefix: "sk-proj-... / sk-...",
-    placeholder: "Masukkan OpenAI API Key (sk-proj-... atau sk-...)",
-    note: "Pastikan akun OpenAI Anda memiliki saldo atau kredit API aktif agar tidak mengalami galat 401 atau quota exceeded.",
+    keyPrefix: "sk-proj-...",
+    placeholder: "sk-proj-... (OpenAI API Key)",
+    note: "Pastikan akun OpenAI Anda memiliki saldo kredit API aktif agar tidak mengalami galat kuota.",
     tutorialSteps: [
       "Buka dashboard resmi OpenAI Developer di platform.openai.com/api-keys.",
       "Masuk dengan akun OpenAI Anda.",
       "Klik tombol '+ Create new secret key'.",
       "Beri nama kunci (misal: 'ChatZAP') dan klik 'Create secret key'.",
-      "Salin kunci yang muncul (awalan 'sk-proj-' atau 'sk-'). Kunci ini hanya tampil satu kali.",
-      "Tempelkan kunci pada kolom di bawah ini, lalu klik 'Simpan & Uji Koneksi'.",
+      "Salin kunci yang muncul (awalan 'sk-proj-' atau 'sk-') lalu simpan di kartu OpenAI.",
     ],
   },
   {
     id: "deepseek",
-    name: "DeepSeek AI & BazaarLink",
-    shortDesc: "Model penalaran mendalam (Chain-of-Thought) dengan rasio akurasi logika tinggi.",
+    name: "DeepSeek AI",
+    shortDesc: "Model penalaran mendalam (Chain-of-Thought) dengan akurasi dekomposisi aljabar tinggi.",
     icon: DeepSeekLogo,
-    badge: "DeepSeek V4 & R1",
+    badge: "DeepSeek V4.1",
+    tint: "bg-blue-600/10 dark:bg-blue-600/15 border-blue-600/25",
     modelId: "deepseek-v4.1-flash",
-    storageKey: "zap_bazaarlink_api_key",
     docUrl: "https://platform.deepseek.com/api_keys",
     docLabel: "platform.deepseek.com",
     keyPrefix: "sk-...",
-    placeholder: "Masukkan DeepSeek API Key (sk-...)",
+    placeholder: "sk-... (DeepSeek API Key)",
     note: "DeepSeek sangat tangguh dalam membimbing penalaran langkah demi langkah dan dekomposisi rumus.",
     tutorialSteps: [
       "Kunjungi platform resmi DeepSeek di platform.deepseek.com.",
       "Daftar atau masuk ke akun Anda, lalu pilih menu 'API Keys' di sidebar kiri.",
       "Klik tombol 'Create API key', masukkan nama deskripsi (misal: 'ChatZAP').",
-      "Salin kunci rahasia yang dihasilkan (awalan 'sk-').",
-      "Tempelkan ke kolom di bawah ini, simpan, dan uji koneksinya.",
+      "Salin kunci rahasia yang dihasilkan (awalan 'sk-') lalu simpan.",
     ],
   },
   {
     id: "claude",
     name: "Anthropic Claude",
-    shortDesc: "Model penalaran Claude 3.5 Sonnet dengan kekakuan logika dan sintaks aljabar rapi.",
+    shortDesc: "Model Claude 3.5 Sonnet dengan struktur logika ketat dan sintaks LaTeX rapi.",
     icon: ClaudeLogo,
-    badge: "Claude 3.5 Sonnet",
+    badge: "Claude 3.5",
+    tint: "bg-amber-600/10 dark:bg-amber-600/15 border-amber-600/25",
     modelId: "claude-3-5-sonnet",
-    storageKey: "zap_claude_api_key",
     docUrl: "https://console.anthropic.com/settings/keys",
     docLabel: "console.anthropic.com",
     keyPrefix: "sk-ant-...",
-    placeholder: "Masukkan Anthropic API Key (sk-ant-...)",
-    note: "Claude 3.5 Sonnet memberikan penjelasan Sokrates yang empatik dan tidak pernah membocorkan jawaban akhir.",
+    placeholder: "sk-ant-... (Anthropic Key)",
+    note: "Claude 3.5 Sonnet memberikan penjelasan Sokrates yang empatik dan terstruktur.",
     tutorialSteps: [
       "Buka Anthropic Console di console.anthropic.com.",
       "Login dan pastikan akun organisasi Anda telah terverifikasi.",
       "Buka menu 'API Keys' di bawah pengaturan profil atau workspace.",
-      "Klik 'Create Key', beri label (misal: 'ChatZAP'), lalu salin kunci yang diawali 'sk-ant-'.",
-      "Tempelkan pada kolom di bawah ini lalu klik 'Simpan & Uji Koneksi'.",
+      "Klik 'Create Key', beri label (misal: 'ChatZAP'), lalu salin kunci berawalan 'sk-ant-'.",
     ],
   },
   {
     id: "nvidia",
     name: "NVIDIA NIM Cloud",
-    shortDesc: "Inferensi GPU cloud berkecepatan tinggi dari NVIDIA dengan kuota 1.000 kredit gratis.",
+    shortDesc: "Inferensi GPU cloud berkecepatan tinggi dari NVIDIA dengan 1.000 kredit gratis.",
     icon: NvidiaLogo,
-    badge: "DeepSeek V4.1 NIM Free",
+    badge: "NIM Free Tier",
+    tint: "bg-lime-500/10 dark:bg-lime-500/15 border-lime-500/25",
     modelId: "nvidia-deepseek-v4",
-    storageKey: "zap_nvidia_api_key",
     docUrl: "https://build.nvidia.com",
     docLabel: "build.nvidia.com",
     keyPrefix: "nvapi-...",
-    placeholder: "Masukkan NVIDIA NIM API Key (nvapi-...)",
-    note: "NVIDIA menyediakan 1.000 kredit inferensi gratis untuk setiap akun pengembang terdaftar.",
+    placeholder: "nvapi-... (NVIDIA NIM Key)",
+    note: "NVIDIA menyediakan 1.000 kredit inferensi gratis untuk akun pengembang terdaftar.",
     tutorialSteps: [
       "Buka katalog model AI NVIDIA di build.nvidia.com.",
-      "Klik tombol 'Log In' di kanan atas dan buat/masuk dengan akun NVIDIA Anda.",
-      "Pilih model 'DeepSeek-V4.1-Flash' atau model open-source yang tersedia.",
-      "Klik tombol hijau 'Get API Key' di pojok kanan atas halaman model.",
-      "Salin kunci yang diawali dengan 'nvapi-'.",
-      "Tempelkan pada kolom di bawah ini lalu simpan.",
+      "Klik tombol 'Log In' di kanan atas dan masuk dengan akun NVIDIA Anda.",
+      "Pilih model 'DeepSeek' atau model open-source yang tersedia.",
+      "Klik tombol hijau 'Get API Key' lalu salin kunci yang diawali dengan 'nvapi-'.",
     ],
   },
   {
     id: "mistral",
-    name: "Mistral AI & Codestral",
-    shortDesc: "Model penalaran matematika dan penulisan sintaks komputasi kilat (~200ms) dari Mistral AI.",
+    name: "Mistral & Codestral",
+    shortDesc: "Model penalaran matematika dan penulisan sintaks komputasi cepat (~200ms).",
     icon: MistralLogo,
     badge: "Codestral 22B",
+    tint: "bg-orange-500/10 dark:bg-orange-500/15 border-orange-500/25",
     modelId: "codestral-latest",
-    storageKey: "zap_mistral_api_key",
     docUrl: "https://console.mistral.ai/api-keys",
     docLabel: "console.mistral.ai",
     keyPrefix: "Bearer token",
@@ -182,36 +208,76 @@ const PROVIDERS: ProviderConfig[] = [
       "Masuk atau buat akun pengembang Mistral Anda.",
       "Pilih menu 'API Keys' pada navigasi akun.",
       "Klik tombol 'Create new key', beri nama (misal: 'ChatZAP') dan salin kuncinya.",
-      "Tempelkan pada kolom di bawah ini lalu klik 'Simpan & Uji Koneksi'.",
     ],
   },
   {
     id: "custom",
-    name: "Model Lokal & Custom (Ollama / vLLM / LM Studio)",
-    shortDesc: "Hubungkan model AI yang berjalan di komputer lokal atau proxy endpoint kompatibel OpenAI.",
+    name: "Model Lokal (Ollama / vLLM / LM Studio)",
+    shortDesc: "Hubungkan model AI yang berjalan di komputer lokal atau endpoint kompatibel OpenAI.",
     icon: OllamaLogo,
     badge: "Self-Hosted / Offline",
+    tint: "bg-purple-500/10 dark:bg-purple-500/15 border-purple-500/25",
     modelId: "custom-api",
-    storageKey: "zap_custom_api_key",
     docUrl: "https://ollama.com",
     docLabel: "ollama.com",
     keyPrefix: "http://localhost:...",
-    placeholder: "Kunci API opsional (jika server lokal membutuhkan otorisasi)",
+    placeholder: "Kunci API opsional (Bearer token)",
     isCustom: true,
     tutorialSteps: [
       "Jalankan server model lokal di komputer Anda, contohnya Ollama: jalankan perintah 'ollama run llama3.3' di terminal.",
       "Pastikan service Ollama berjalan pada port standar: http://localhost:11434/v1.",
-      "Jika Anda menggunakan LM Studio, buka tab 'Developer' dan klik 'Start Server' (port standar http://localhost:1234/v1).",
-      "Masukkan URL Endpoint dan Nama Model yang sesuai di form bawah.",
-      "Klik 'Uji Koneksi' untuk memastikan peramban dapat menjangkau server lokal Anda.",
+      "Jika menggunakan LM Studio, buka tab 'Developer' dan klik 'Start Server' (port standar http://localhost:1234/v1).",
+      "Masukkan URL Endpoint dan Nama Model yang sesuai, lalu klik 'Simpan' dan 'Uji Koneksi'.",
     ],
   },
 ];
 
-export default function ConnectorPage() {
-  const router = useRouter();
-  const { theme, toggleTheme } = useTheme();
+const QUICK_MODELS = [
+  {
+    id: "gemini-2.0-flash",
+    label: "Gemini 2.0 Flash",
+    sub: "Google DeepMind",
+    icon: GeminiLogo,
+    tint: "bg-blue-500/10 dark:bg-blue-500/15 border-blue-500/25",
+  },
+  {
+    id: "deepseek-v4.1-flash",
+    label: "DeepSeek V4.1",
+    sub: "DeepSeek AI",
+    icon: DeepSeekLogo,
+    tint: "bg-blue-600/10 dark:bg-blue-600/15 border-blue-600/25",
+  },
+  {
+    id: "gpt-4o",
+    label: "GPT-4o Omni",
+    sub: "OpenAI",
+    icon: OpenAILogo,
+    tint: "bg-emerald-500/10 dark:bg-emerald-500/15 border-emerald-500/25",
+  },
+  {
+    id: "claude-3-5-sonnet",
+    label: "Claude 3.5 Sonnet",
+    sub: "Anthropic",
+    icon: ClaudeLogo,
+    tint: "bg-amber-600/10 dark:bg-amber-600/15 border-amber-600/25",
+  },
+  {
+    id: "nvidia-deepseek-v4",
+    label: "NVIDIA NIM",
+    sub: "GPU Cloud",
+    icon: NvidiaLogo,
+    tint: "bg-lime-500/10 dark:bg-lime-500/15 border-lime-500/25",
+  },
+  {
+    id: "sympy-cfl",
+    label: "SymPy CAS",
+    sub: "Offline < 1 ms",
+    icon: SymPyLogo,
+    tint: "bg-sky-500/10 dark:bg-sky-500/15 border-sky-500/25",
+  },
+];
 
+export default function ConnectorPage() {
   // Active Model State
   const [activeModelId, setActiveModelId] = useState<string>("gemini-2.0-flash");
   const [activeModelNotice, setActiveModelNotice] = useState<string>("");
@@ -220,63 +286,57 @@ export default function ConnectorPage() {
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [showKeyVisibility, setShowKeyVisibility] = useState<Record<string, boolean>>({});
 
+  // Akun yang memuat halaman ini. Disimpan di ref agar tab ini tetap memakai
+  // namespace akunnya sendiri walau tab lain di peramban yang sama login akun lain.
+  const currentUserRef = useRef<ZAPUser | null>(null);
+
   // Custom API configuration
   const [customBaseUrl, setCustomBaseUrl] = useState<string>("http://localhost:11434/v1");
   const [customModelName, setCustomModelName] = useState<string>("llama3.3");
 
-  // Accordion state: which provider's tutorial is currently open
-  const [expandedTutorialId, setExpandedTutorialId] = useState<string | null>(null);
+  // Modal state for Provider Setup Guide
+  const [guideProvider, setGuideProvider] = useState<ProviderConfig | null>(null);
 
   // Testing states
   const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; msg: string }>>({});
 
-  // Load saved state from LocalStorage on mount
+  // Muat state tersimpan saat mount.
+  // Kunci provider HANYA dibaca dari sesi peramban per akun (utils/provider-keys.ts),
+  // bukan dari localStorage global dan bukan dari vault server.
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    const storedUser = readStoredUser();
+    currentUserRef.current = storedUser;
+
+    // Pindahkan sisa kunci global lama (lintas akun) ke namespace akun ini,
+    // lalu hapus salinan globalnya agar akun lain tidak dapat membacanya.
+    migrateLegacyProviderKeys(storedUser);
 
     const savedModel = localStorage.getItem("zap_selected_model_id") || "gemini-2.0-flash";
     setActiveModelId(savedModel);
 
-    const loadedKeys: Record<string, string> = {
-      gemini: localStorage.getItem("zap_gemini_api_key") || "",
-      openai: localStorage.getItem("zap_openai_api_key") || "",
-      deepseek: localStorage.getItem("zap_bazaarlink_api_key") || "",
-      claude: localStorage.getItem("zap_claude_api_key") || "",
-      nvidia: localStorage.getItem("zap_nvidia_api_key") || "",
-      mistral: localStorage.getItem("zap_mistral_api_key") || "",
-      custom: localStorage.getItem("zap_custom_api_key") || "",
-    };
+    const loadedKeys: Record<string, string> = {};
+    for (const provider of PROVIDERS) {
+      const providerKeyId = PROVIDER_KEY_IDS[provider.id];
+      loadedKeys[provider.id] = providerKeyId ? getProviderKey(providerKeyId, storedUser) || "" : "";
+    }
     setKeys(loadedKeys);
 
-    setCustomBaseUrl(localStorage.getItem("zap_custom_base_url") || "http://localhost:11434/v1");
-    setCustomModelName(localStorage.getItem("zap_custom_model_name") || "llama3.3");
+    setCustomBaseUrl(getProviderSetting("customBaseUrl", storedUser) || "http://localhost:11434/v1");
+    setCustomModelName(getProviderSetting("customModelName", storedUser) || "llama3.3");
 
-    // Pulihkan kunci yang tersimpan di Akun Google
-    const userStr = localStorage.getItem("zap_authenticated_user");
-    if (userStr) {
-      try {
-        const u = JSON.parse(userStr);
-        restoreAccountData(u).then((restored) => {
-          if (restored.configs) {
-            setKeys((prev) => ({
-              ...prev,
-              gemini: restored.configs.geminiApiKey || prev.gemini,
-              openai: restored.configs.openaiApiKey || prev.openai,
-              deepseek: restored.configs.bazaarlinkApiKey || prev.deepseek,
-              claude: restored.configs.claudeApiKey || prev.claude,
-              nvidia: restored.configs.nvidiaApiKey || prev.nvidia,
-              mistral: restored.configs.mistralApiKey || prev.mistral,
-              custom: restored.configs.customApiKey || prev.custom,
-            }));
-            if (restored.configs.customBaseUrl) setCustomBaseUrl(restored.configs.customBaseUrl);
-            if (restored.configs.customModelName) setCustomModelName(restored.configs.customModelName);
-            if (restored.configs.selectedModelId) setActiveModelId(restored.configs.selectedModelId);
-          }
+    if (storedUser) {
+      // restoreAccountData hanya memulihkan percakapan, workspaces, dan
+      // preferensi non-rahasia. Kunci provider TIDAK dipulihkan dari server.
+      restoreAccountData(storedUser)
+        .then((restored) => {
+          if (restored.configs?.selectedModelId) setActiveModelId(restored.configs.selectedModelId);
+        })
+        .catch((err) => {
+          console.warn("Gagal membaca backup akun di connector:", err);
         });
-      } catch (err) {
-        console.warn("Gagal membaca backup akun di connector:", err);
-      }
     }
   }, []);
 
@@ -284,40 +344,34 @@ export default function ConnectorPage() {
     setActiveModelId(modelId);
     if (typeof window !== "undefined") {
       localStorage.setItem("zap_selected_model_id", modelId);
-      setActiveModelNotice(`Model aktif bimbingan diubah ke: ${modelName}`);
-      setTimeout(() => setActiveModelNotice(""), 3500);
+      setActiveModelNotice(`Model aktif diubah ke ${modelName}`);
+      setTimeout(() => setActiveModelNotice(""), 3000);
       try {
-        const userStr = localStorage.getItem("zap_authenticated_user");
-        if (userStr) {
-          const u = JSON.parse(userStr);
+        const u = currentUserRef.current;
+        if (u) {
           syncAccountBackup(u, { configs: { selectedModelId: modelId } });
         }
       } catch {}
     }
   };
 
-  const handleSaveKey = (providerId: string, storageKey: string, val: string, providerName: string) => {
+  const handleSaveKey = (providerId: string, val: string, providerName: string) => {
     if (typeof window === "undefined") return;
     const cleanVal = val.trim();
-    localStorage.setItem(storageKey, cleanVal);
+    // Nilai kosong menghapus kunci dari sesi akun ini (setProviderKey menangani trim).
+    const providerKeyId = PROVIDER_KEY_IDS[providerId];
+    if (providerKeyId) setProviderKey(providerKeyId, cleanVal, currentUserRef.current);
     setKeys((prev) => ({ ...prev, [providerId]: cleanVal }));
 
-    // Auto-backup konfigurasi ke Akun Google
-    try {
-      const userStr = localStorage.getItem("zap_authenticated_user");
-      if (userStr) {
-        const u = JSON.parse(userStr);
-        syncAccountBackup(u);
-      }
-    } catch {}
-
+    // Sengaja TIDAK memanggil syncAccountBackup: kunci provider tidak pernah
+    // dikirim ke vault server, jadi tidak ada data rahasia yang perlu disinkronkan.
     setTestResults((prev) => ({
       ...prev,
       [providerId]: {
         success: true,
         msg: cleanVal
-          ? `Kunci untuk ${providerName} berhasil disimpan di penyimpanan browser!`
-          : `Kunci untuk ${providerName} telah dihapus.`,
+          ? `Kunci ${providerName} disimpan.`
+          : `Kunci ${providerName} dihapus.`,
       },
     }));
 
@@ -327,20 +381,22 @@ export default function ConnectorPage() {
         delete copy[providerId];
         return copy;
       });
-    }, 4000);
+    }, 3500);
   };
 
   const handleSaveCustomSettings = () => {
     if (typeof window === "undefined") return;
-    localStorage.setItem("zap_custom_base_url", customBaseUrl.trim());
-    localStorage.setItem("zap_custom_model_name", customModelName.trim());
-    localStorage.setItem("zap_custom_api_key", (keys["custom"] || "").trim());
+    const user = currentUserRef.current;
+    // Endpoint/model lokal juga hanya hidup di sesi peramban per akun.
+    setProviderSetting("customBaseUrl", customBaseUrl, user);
+    setProviderSetting("customModelName", customModelName, user);
+    setProviderKey("custom", keys["custom"] || "", user);
 
     setTestResults((prev) => ({
       ...prev,
       custom: {
         success: true,
-        msg: "Konfigurasi model lokal/custom berhasil disimpan!",
+        msg: "Konfigurasi model lokal berhasil disimpan.",
       },
     }));
 
@@ -350,19 +406,20 @@ export default function ConnectorPage() {
         delete copy["custom"];
         return copy;
       });
-    }, 4000);
+    }, 3500);
   };
 
-  const handleDeleteKey = (providerId: string, storageKey: string, providerName: string) => {
+  const handleDeleteKey = (providerId: string, providerName: string) => {
     if (typeof window === "undefined") return;
-    localStorage.removeItem(storageKey);
+    const providerKeyId = PROVIDER_KEY_IDS[providerId];
+    if (providerKeyId) setProviderKey(providerKeyId, "", currentUserRef.current);
     setKeys((prev) => ({ ...prev, [providerId]: "" }));
 
     setTestResults((prev) => ({
       ...prev,
       [providerId]: {
         success: true,
-        msg: `Kunci API ${providerName} berhasil dihapus dari browser.`,
+        msg: `Kunci ${providerName} dihapus.`,
       },
     }));
 
@@ -372,11 +429,7 @@ export default function ConnectorPage() {
         delete copy[providerId];
         return copy;
       });
-    }, 4000);
-  };
-
-  const toggleTutorial = (id: string) => {
-    setExpandedTutorialId((prev) => (prev === id ? null : id));
+    }, 3500);
   };
 
   const toggleKeyVisibility = (providerId: string) => {
@@ -386,14 +439,12 @@ export default function ConnectorPage() {
     }));
   };
 
-  // Test provider connection
   const handleTestConnection = async (provider: ProviderConfig) => {
     const keyVal = (keys[provider.id] || "").trim();
     setTestingProviderId(provider.id);
 
     try {
       if (provider.id === "gemini") {
-        // Test via dedicated verification endpoint
         const res = await fetch("/api/auth/verify-key", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -405,7 +456,7 @@ export default function ConnectorPage() {
             ...prev,
             [provider.id]: {
               success: true,
-              msg: `Koneksi Google Gemini Sukses! (${data.tier || "Terverifikasi"}, ${data.latencyMs}ms)`,
+              msg: `Terhubung (${data.tier || "Aktif"}, ${data.latencyMs}ms)`,
             },
           }));
         } else {
@@ -413,14 +464,13 @@ export default function ConnectorPage() {
             ...prev,
             [provider.id]: {
               success: false,
-              msg: data.error || "Gagal memverifikasi API key Google Gemini.",
+              msg: data.error || "Gagal memverifikasi kunci Gemini.",
             },
           }));
         }
       } else {
-        // Test via chat endpoint with test prompt
         const bodyPayload: Record<string, string | undefined> = {
-          message: "Halo! Ini pengujian koneksi ZAP. Jawab dengan satu kalimat pendek.",
+          message: "Halo! Jawab dengan satu kata.",
           modelId: provider.modelId,
         };
 
@@ -447,7 +497,7 @@ export default function ConnectorPage() {
             ...prev,
             [provider.id]: {
               success: true,
-              msg: `Koneksi berhasil! Model merespons: "${data.reply.slice(0, 70)}..."`,
+              msg: `Koneksi sukses! Respons diterima.`,
             },
           }));
         } else {
@@ -455,7 +505,7 @@ export default function ConnectorPage() {
             ...prev,
             [provider.id]: {
               success: false,
-              msg: data.reply || data.error || "Model tidak memberikan respons valid.",
+              msg: data.reply || data.error || "Respons tidak valid.",
             },
           }));
         }
@@ -465,7 +515,7 @@ export default function ConnectorPage() {
         ...prev,
         [provider.id]: {
           success: false,
-          msg: err instanceof Error ? err.message : "Kesalahan jaringan saat pengujian.",
+          msg: err instanceof Error ? err.message : "Kesalahan jaringan.",
         },
       }));
     } finally {
@@ -478,196 +528,142 @@ export default function ConnectorPage() {
   const ActiveModelBrandIcon = currentActiveModelObj.icon;
   const savedKeyCount = Object.values(keys).filter(Boolean).length;
 
+  const cloudProviders = PROVIDERS.filter((p) => !p.isCustom);
+  const customProvider = PROVIDERS.find((p) => p.isCustom)!;
+
   return (
-    <div className="min-h-screen bg-[#faf9f6] dark:bg-[#090a0f] text-[#09090b] dark:text-zinc-100 font-sans selection:bg-[#d4a574]/30 selection:text-[#09090b] dark:selection:text-white pb-24 transition-colors duration-200">
-      {/* 1. TOP STICKY EDITORIAL NAVBAR */}
-      <header className="sticky top-0 z-40 w-full bg-white/85 dark:bg-[#0c0e14]/90 backdrop-blur-xl border-b border-zinc-200/80 dark:border-white/[0.08] transition-colors">
-        <div className="max-w-5xl mx-auto h-16 px-4 sm:px-6 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <Link
-              href="/"
-              className="flex items-center gap-2.5 font-semibold text-sm sm:text-base tracking-tight shrink-0 group"
-            >
-              <div className="w-7 h-7 rounded-lg bg-[#09090b] dark:bg-white text-white dark:text-[#09090b] flex items-center justify-center shadow-sm group-hover:bg-[#c4956a] dark:group-hover:bg-[#d4a574] transition-colors">
-                <ZapLogo className="w-4 h-4" />
-              </div>
-              <span className="text-[#09090b] dark:text-white">
-                ChatZAP <span className="font-normal text-zinc-400">Connector</span>
-              </span>
-            </Link>
+    <div className="min-h-screen bg-[#fbf7f0] dark:bg-[#090a0f] text-[#09090b] dark:text-zinc-100 font-sans selection:bg-[#d4a574]/30 selection:text-[#09090b] dark:selection:text-white transition-colors duration-200">
+      <SiteHeader />
 
-            <div className="w-[1px] h-4 bg-zinc-200 dark:bg-white/[0.1] hidden sm:block" />
-
-            <Link
-              href="/chat"
-              className="hidden sm:inline-flex items-center gap-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400 hover:text-[#09090b] dark:hover:text-white transition py-1.5 px-2.5 rounded-full hover:bg-zinc-900/[0.04] dark:hover:bg-white/[0.06]"
-            >
-              <ChevronLeft className="w-3.5 h-3.5" />
-              <span>Kembali ke ChatZAP</span>
-            </Link>
+      {/* 2. MAIN CONTENT CONTAINER (WIDE MULTI-COLUMN LAYOUT) */}
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 pt-24 sm:pt-28 pb-4 space-y-6">
+        {/* Compact Header & Active Model Status */}
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+          <div className="space-y-1.5">
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white dark:bg-white/[0.05] border border-zinc-200/80 dark:border-white/[0.08] text-[10px] font-mono font-semibold uppercase tracking-wider text-zinc-600 dark:text-zinc-300">
+              <LocalEnclaveEmblem className="w-3 h-3" />
+              <span>BYOK Enclave &amp; Multi-Model Router</span>
+            </div>
+            <h1 className="text-xl sm:text-2xl font-bold text-[#09090b] dark:text-white tracking-tight">
+              Konektor Model AI &amp; Kunci API
+            </h1>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-xl">
+              Pilih model utama untuk sesi Sokrates Anda dan kelola kunci API di satu layar ringkas. Semua respons tetap diverifikasi oleh SymPy CAS &amp; Zero-Answer Guardrail.
+            </p>
           </div>
 
-          <div className="flex items-center gap-2.5">
-            <div className="hidden md:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#faf9f6] dark:bg-white/[0.05] border border-zinc-200/80 dark:border-white/[0.08] text-[11px] font-mono text-zinc-600 dark:text-zinc-300">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              <span>{savedKeyCount} Kunci BYOK Tersimpan</span>
+          {/* Active Model Pill Display */}
+          <div className="flex items-center gap-3 px-3.5 py-2.5 rounded-2xl bg-white dark:bg-[#11131a] border border-zinc-200/90 dark:border-white/[0.08] shadow-2xs shrink-0">
+            <div className="w-8 h-8 rounded-xl bg-white dark:bg-white/[0.06] border border-zinc-200/80 dark:border-white/[0.1] shadow-2xs flex items-center justify-center shrink-0">
+              <ActiveModelBrandIcon className="w-4.5 h-4.5" />
             </div>
-
-            <button
-              type="button"
-              onClick={toggleTheme}
-              title={theme === "dark" ? "Beralih ke Mode Terang" : "Beralih ke Mode Gelap"}
-              aria-label="Toggle Theme"
-              className="w-9 h-9 rounded-full bg-[#faf9f6] dark:bg-white/[0.06] hover:bg-[#f5f3ef] dark:hover:bg-white/[0.12] border border-zinc-200/80 dark:border-white/[0.1] flex items-center justify-center text-zinc-700 dark:text-zinc-300 transition cursor-pointer shadow-sm"
-            >
-              {theme === "dark" ? (
-                <Sun className="w-4 h-4 text-[#d4a574]" />
-              ) : (
-                <Moon className="w-4 h-4 text-zinc-700" />
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => router.push("/chat")}
-              className="text-xs font-bold px-4 py-2 min-h-[36px] rounded-full bg-[#09090b] dark:bg-white hover:bg-zinc-800 dark:hover:bg-zinc-200 text-white dark:text-[#09090b] transition flex items-center gap-2 cursor-pointer shadow-sm"
-            >
-              <span>Buka ChatZAP</span>
-              <span className="w-5 h-5 rounded-full bg-white/15 dark:bg-black/10 flex items-center justify-center">
-                <ArrowRight className="w-3 h-3" />
-              </span>
-            </button>
+            <div className="pr-1">
+              <div className="text-[10px] font-medium text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+                Model Aktif Saat Ini
+              </div>
+              <div className="text-xs font-bold text-[#09090b] dark:text-white flex items-center gap-1.5">
+                <span>{currentActiveModelObj.name}</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              </div>
+            </div>
           </div>
         </div>
-      </header>
 
-      {/* 2. MAIN CONTENT WRAPPER */}
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 pt-8 sm:pt-10 space-y-8">
-        {/* Page Title & Editorial Intro */}
-        <div className="space-y-2">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white dark:bg-white/[0.05] border border-zinc-200/80 dark:border-white/[0.08] text-[11px] font-mono font-semibold uppercase tracking-wider text-[#8f5e32] dark:text-[#d4a574] shadow-sm">
-            <LocalEnclaveEmblem className="w-3.5 h-3.5" />
-            <span>BYOK ENCLAVE &amp; MULTI-MODEL ROUTER</span>
+        {/* Toast Notification when Switching Active Model */}
+        {activeModelNotice && (
+          <div className="px-3.5 py-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 text-emerald-800 dark:text-emerald-200 text-xs font-medium flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <span>{activeModelNotice}</span>
           </div>
-          <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-[#09090b] dark:text-white tracking-tight">
-            Konektor Model AI &amp;{" "}
-            <span className="font-serif font-normal text-[#c4956a]">
-              Enklave Kunci API
-            </span>
-          </h1>
-          <p className="text-xs sm:text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed max-w-2xl">
-            Pilih model AI untuk sesi bimbingan Sokrates Anda dan kelola kredensial BYOK. Kunci disimpan secara lokal di peramban Anda (<code className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-[#f5f3ef] dark:bg-white/[0.06] text-[#8f5e32] dark:text-[#d4a574]">localStorage</code>) dan setiap respons tetap disaring oleh <strong className="font-semibold text-zinc-700 dark:text-zinc-200">Zero-Answer Guardrail</strong>.
-          </p>
-        </div>
+        )}
 
         {/* =================================================================== */}
-        {/* SECTION 1: MODEL AKTIF SAAT INI (QUICK SWITCHER) */}
+        {/* SECTION 1: COMPACT 6-COLUMN QUICK MODEL SWITCHER BAR */}
         {/* =================================================================== */}
-        <section className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-[#0f1118] border border-zinc-200/90 dark:border-white/[0.08] shadow-sm space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-zinc-100 dark:border-white/[0.06]">
-            <div className="flex items-center gap-3.5">
-              <div className="w-10 h-10 rounded-2xl bg-[#faf9f6] dark:bg-white/[0.04] border border-zinc-200/80 dark:border-white/[0.08] flex items-center justify-center shrink-0 shadow-sm">
-                <ActiveModelBrandIcon className="w-5 h-5" />
-              </div>
-              <div>
-                <span className="text-[11px] font-mono text-zinc-400 dark:text-zinc-500 uppercase tracking-wider block">
-                  Model Aktif ChatZAP Saat Ini
-                </span>
-                <div className="text-base font-bold text-[#09090b] dark:text-white flex items-center gap-2 mt-0.5">
-                  <span>{currentActiveModelObj.name}</span>
-                  <span className="text-[11px] font-mono px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50 font-semibold">
-                    Aktif
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => router.push("/chat")}
-              className="text-xs font-semibold text-[#8f5e32] dark:text-[#d4a574] hover:text-[#09090b] dark:hover:text-white bg-[#faf4ed] dark:bg-[#c4956a]/15 hover:bg-[#f3e8da] py-2 px-3.5 rounded-full border border-[#d4a574]/40 inline-flex items-center gap-1.5 cursor-pointer transition self-start sm:self-auto"
-            >
-              <span>Mulai Sesi di ChatZAP</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
+        <section className="p-4 rounded-2xl bg-white dark:bg-[#11131a] border border-zinc-200/90 dark:border-white/[0.08] shadow-2xs space-y-2.5">
+          <div className="flex items-center justify-between px-0.5">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+              Pilih Cepat Model Utama ChatZAP
+            </span>
+            <span className="text-[11px] text-zinc-400 dark:text-zinc-500 hidden sm:inline">
+              Klik untuk mengaktifkan langsung
+            </span>
           </div>
 
-          {activeModelNotice && (
-            <div className="p-3 rounded-2xl bg-[#faf4ed] dark:bg-[#c4956a]/15 border border-[#d4a574]/50 text-[#8f5e32] dark:text-[#d4a574] text-xs font-medium flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-[#8f5e32] dark:text-[#d4a574] shrink-0" />
-              <span>{activeModelNotice}</span>
-            </div>
-          )}
-
-          {/* Clean Segmented Grid to Switch Active Model */}
-          <div className="space-y-2">
-            <span className="text-xs text-zinc-500 dark:text-zinc-400 block font-medium">
-              Klik salah satu model di bawah untuk menjadikannya model utama di ChatZAP:
-            </span>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
-              {[
-                { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash", sub: "Google DeepMind", icon: GeminiLogo },
-                { id: "deepseek-v4.1-flash", label: "DeepSeek-V4.1", sub: "DeepSeek AI", icon: DeepSeekLogo },
-                { id: "gpt-4o", label: "GPT-4o Omni", sub: "OpenAI", icon: OpenAILogo },
-                { id: "claude-3-5-sonnet", label: "Claude 3.5 Sonnet", sub: "Anthropic", icon: ClaudeLogo },
-                { id: "nvidia-deepseek-v4", label: "NVIDIA DeepSeek", sub: "NVIDIA NIM", icon: NvidiaLogo },
-                { id: "sympy-cfl", label: "SymPy CAS Kernel", sub: "Offline < 1 ms", icon: SymPyLogo },
-              ].map((item) => {
-                const isSelected = activeModelId === item.id;
-                const IconComp = item.icon;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => handleSelectActiveModel(item.id, item.label)}
-                    className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex items-center justify-between gap-2.5 ${
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+            {QUICK_MODELS.map((item) => {
+              const isSelected = activeModelId === item.id;
+              const IconComp = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleSelectActiveModel(item.id, item.label)}
+                  className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-2.5 min-w-0 ${
+                    isSelected
+                      ? "bg-[#09090b] dark:bg-white border-[#09090b] dark:border-white text-white dark:text-[#09090b] shadow-xs"
+                      : "bg-[#faf9f6] dark:bg-white/[0.02] border-zinc-200/80 dark:border-white/[0.06] text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100/80 dark:hover:bg-white/[0.05]"
+                  }`}
+                >
+                  <div
+                    className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
                       isSelected
-                        ? "bg-[#faf4ed]/80 dark:bg-[#c4956a]/15 border-[#c4956a] text-[#09090b] dark:text-white shadow-sm ring-1 ring-[#c4956a]/30"
-                        : "bg-[#faf9f6] dark:bg-white/[0.02] border-zinc-200/80 dark:border-white/[0.06] text-zinc-700 dark:text-zinc-300 hover:bg-white dark:hover:bg-white/[0.05] hover:border-zinc-300 dark:hover:border-white/[0.12]"
+                        ? "bg-white/20 dark:bg-white/20 border border-white/30"
+                        : `${item.tint} border shadow-2xs`
                     }`}
                   >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-8 h-8 rounded-xl bg-white dark:bg-white/[0.06] border border-zinc-200/70 dark:border-white/[0.08] flex items-center justify-center shrink-0 shadow-sm">
-                        <IconComp className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold truncate text-[#09090b] dark:text-white">{item.label}</div>
-                        <div className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">{item.sub}</div>
-                      </div>
+                    <IconComp className="w-3.5 h-3.5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold truncate">{item.label}</div>
+                    <div
+                      className={`text-[10px] truncate ${
+                        isSelected
+                          ? "text-zinc-300 dark:text-zinc-600"
+                          : "text-zinc-400 dark:text-zinc-500"
+                      }`}
+                    >
+                      {item.sub}
                     </div>
-                    {isSelected && (
-                      <span className="w-5 h-5 rounded-full bg-[#c4956a] text-white flex items-center justify-center shrink-0 shadow-sm">
-                        <Check className="w-3 h-3" />
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </section>
 
         {/* =================================================================== */}
-        {/* SECTION 2: DAFTAR PENYEDIA AI & TUTORIAL SETUP API KEY */}
+        {/* SECTION 2: 3-COLUMN GRID OF CLOUD AI PROVIDERS */}
         {/* =================================================================== */}
-        <section className="space-y-4">
-          <div className="flex items-center justify-between px-1">
+        <section className="space-y-3">
+          <div className="flex items-center justify-between px-0.5">
             <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-[#c4956a]" />
-              <h2 className="text-sm font-bold text-[#09090b] dark:text-white tracking-wide uppercase font-mono">
-                Kredensial Penyedia Model &amp; Ollama Lokal
+              <Key className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" />
+              <h2 className="text-xs font-bold text-[#09090b] dark:text-white tracking-wider uppercase">
+                Penyedia Cloud AI (BYOK)
               </h2>
             </div>
-            <span className="text-xs font-mono text-zinc-500 dark:text-zinc-400">
-              {savedKeyCount} / {PROVIDERS.length} Dikonfigurasi
+            <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+              {savedKeyCount} dari {PROVIDERS.length} Dikonfigurasi
             </span>
           </div>
 
-          <div className="space-y-4">
-            {PROVIDERS.map((provider) => {
+          {/* Pemberitahuan kebijakan penyimpanan kunci (per akun, hanya sesi peramban) */}
+          <div className="px-3 py-2.5 rounded-xl bg-white dark:bg-white/[0.03] border border-zinc-200/80 dark:border-white/[0.08] text-[11px] text-zinc-500 dark:text-zinc-400 flex items-start gap-2">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+            <span className="leading-relaxed">
+              Kunci API disimpan di sesi peramban ini untuk akun yang sedang login. Bila vault
+              terenkripsi aktif, kunci ikut dicadangkan ke akun Anda dalam bentuk{" "}
+              <strong className="text-[#09090b] dark:text-zinc-200">ciphertext zero-knowledge</strong>{" "}
+              - server tidak dapat membacanya, dan perangkat lain cukup membuka vault dengan
+              passphrase yang sama.
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {cloudProviders.map((provider) => {
               const IconComp = provider.icon;
               const hasKey = Boolean(keys[provider.id]);
-              const isTutorialOpen = expandedTutorialId === provider.id;
               const testResult = testResults[provider.id];
               const isTesting = testingProviderId === provider.id;
               const isKeyVisible = showKeyVisibility[provider.id] || false;
@@ -676,292 +672,177 @@ export default function ConnectorPage() {
               return (
                 <div
                   key={provider.id}
-                  className={`rounded-3xl bg-white dark:bg-[#0f1118] border transition-all overflow-hidden ${
+                  className={`rounded-2xl bg-white dark:bg-[#11131a] border p-4 sm:p-5 flex flex-col justify-between gap-4 transition-all ${
                     isModelSelected
-                      ? "border-[#c4956a]/80 shadow-[0_8px_30px_-12px_rgba(196,149,106,0.22)]"
-                      : "border-zinc-200/90 dark:border-white/[0.08] shadow-sm hover:border-zinc-300/90"
+                      ? "border-[#09090b] dark:border-white/40 ring-1 ring-[#09090b]/10 dark:ring-white/15 shadow-sm"
+                      : "border-zinc-200/90 dark:border-white/[0.08] shadow-2xs hover:border-zinc-300 dark:hover:border-white/[0.14]"
                   }`}
                 >
-                  {/* Card Main Bar */}
-                  <div className="p-5 sm:p-6 space-y-4">
-                    {/* Header Row */}
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div className="flex items-start gap-3.5">
-                        <div className="w-11 h-11 rounded-2xl bg-[#faf9f6] dark:bg-white/[0.04] border border-zinc-200/80 dark:border-white/[0.08] flex items-center justify-center shrink-0 mt-0.5 shadow-sm">
+                  {/* Top Info Area */}
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div
+                          className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border transition-colors shadow-2xs ${
+                            provider.tint || "bg-[#faf9f6] dark:bg-white/[0.04] border-zinc-200/80 dark:border-white/[0.08]"
+                          }`}
+                        >
                           <IconComp className="w-5 h-5" />
                         </div>
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <h3 className="text-base font-bold text-[#09090b] dark:text-white tracking-tight">
-                              {provider.name}
-                            </h3>
-                            <span className="text-[11px] font-mono px-2.5 py-0.5 rounded-full bg-[#f5f3ef] dark:bg-white/[0.06] text-zinc-700 dark:text-zinc-300 border border-zinc-200/80 dark:border-white/[0.08]">
-                              {provider.badge}
-                            </span>
-                          </div>
-                          <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
-                            {provider.shortDesc}
-                          </p>
+                        <div className="min-w-0">
+                          <h3 className="text-sm font-bold text-[#09090b] dark:text-white truncate">
+                            {provider.name}
+                          </h3>
+                          <span className="text-[10px] font-medium text-zinc-400 dark:text-zinc-500 block">
+                            {provider.badge}
+                          </span>
                         </div>
                       </div>
 
-                      {/* Status Badge & Tutorial Trigger */}
-                      <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
-                        {hasKey ? (
-                          <span className="text-xs px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50 font-semibold flex items-center gap-1.5">
-                            <Check className="w-3.5 h-3.5" />
-                            <span>Kunci Tersimpan</span>
-                          </span>
-                        ) : provider.id === "gemini" ? (
-                          <span className="text-xs px-3 py-1 rounded-full bg-[#faf4ed] dark:bg-[#c4956a]/15 text-[#8f5e32] dark:text-[#d4a574] border border-[#d4a574]/40 font-semibold">
-                            Auto Server Pool
-                          </span>
-                        ) : (
-                          <span className="text-xs px-3 py-1 rounded-full bg-[#f5f3ef] dark:bg-white/[0.04] text-zinc-500 dark:text-zinc-400 border border-zinc-200/70 dark:border-white/[0.06] font-medium">
-                            Belum Dikonfigurasi
-                          </span>
-                        )}
-
-                        <button
-                          type="button"
-                          onClick={() => toggleTutorial(provider.id)}
-                          aria-expanded={isTutorialOpen}
-                          className="text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:text-[#09090b] dark:hover:text-white px-3 py-1 min-h-[30px] rounded-full bg-[#faf9f6] dark:bg-white/[0.04] hover:bg-[#f5f3ef] dark:hover:bg-white/[0.08] border border-zinc-200/80 dark:border-white/[0.08] transition cursor-pointer flex items-center gap-1"
-                        >
-                          <span>Panduan</span>
-                          {isTutorialOpen ? (
-                            <ChevronUp className="w-3.5 h-3.5" />
-                          ) : (
-                            <ChevronDown className="w-3.5 h-3.5" />
-                          )}
-                        </button>
-                      </div>
+                      {/* Compact Status Pill */}
+                      {hasKey ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/50 font-semibold flex items-center gap-1 shrink-0">
+                          <Check className="w-2.5 h-2.5" />
+                          <span>Tersimpan</span>
+                        </span>
+                      ) : provider.id === "gemini" ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-white/[0.06] text-zinc-700 dark:text-zinc-300 font-medium shrink-0">
+                          Server Pool
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-100/80 dark:bg-white/[0.03] text-zinc-400 dark:text-zinc-500 font-medium shrink-0">
+                          Kosong
+                        </span>
+                      )}
                     </div>
 
-                    {/* Tutorial / Panduan Step-by-Step (Accordion) */}
-                    {isTutorialOpen && (
-                      <div className="p-4 rounded-2xl bg-[#faf9f6] dark:bg-[#14151b] border border-zinc-200/80 dark:border-white/[0.08] space-y-2.5 text-xs">
-                        <div className="flex items-center justify-between pb-2 border-b border-zinc-200/70 dark:border-white/[0.06]">
-                          <span className="font-semibold text-[#09090b] dark:text-zinc-200 flex items-center gap-1.5">
-                            <Key className="w-3.5 h-3.5 text-[#8f5e32] dark:text-[#d4a574]" />
-                            <span>Cara Mendapatkan Kunci API {provider.name}:</span>
-                          </span>
-                          <a
-                            href={provider.docUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs text-[#8f5e32] dark:text-[#d4a574] hover:text-[#09090b] dark:hover:text-white py-1 px-2 rounded-lg inline-flex items-center gap-1 font-semibold underline"
-                          >
-                            <span>Buka {provider.docLabel}</span>
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                        </div>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed line-clamp-2">
+                      {provider.shortDesc}
+                    </p>
+                  </div>
 
-                        <ol className="space-y-1.5 text-zinc-600 dark:text-zinc-300 list-decimal list-inside leading-relaxed pl-1">
-                          {provider.tutorialSteps.map((step, idx) => (
-                            <li key={idx}>
-                              <span className="text-zinc-800 dark:text-zinc-200">{step}</span>
-                            </li>
-                          ))}
-                        </ol>
-
-                        {provider.note && (
-                          <div className="pt-2 text-xs text-zinc-500 dark:text-zinc-400 border-t border-zinc-200/70 dark:border-white/[0.06] italic">
-                            💡 Catatan: {provider.note}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Form Input Kunci API */}
-                    {provider.isCustom ? (
-                      /* Custom / Local API (Ollama, LM Studio) Form */
-                      <div className="space-y-3 pt-1">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <div>
-                            <label htmlFor="custom-base-url" className="text-xs font-medium text-zinc-600 dark:text-zinc-400 block mb-1.5">
-                              Base URL (OpenAI-Compatible):
-                            </label>
-                            <input
-                              id="custom-base-url"
-                              type="text"
-                              aria-label="Base URL (OpenAI-Compatible)"
-                              value={customBaseUrl}
-                              onChange={(e) => setCustomBaseUrl(e.target.value)}
-                              placeholder="http://localhost:11434/v1"
-                              className="w-full bg-[#faf9f6] dark:bg-[#0a0c12] focus:bg-white border border-zinc-200/90 dark:border-white/[0.1] rounded-xl px-3.5 py-2 min-h-[38px] text-xs text-[#09090b] dark:text-white placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-[#c4956a]/25 focus:border-[#c4956a] font-mono transition"
-                            />
-                          </div>
-                          <div>
-                            <label htmlFor="custom-model-name" className="text-xs font-medium text-zinc-600 dark:text-zinc-400 block mb-1.5">
-                              Nama Model Lokal:
-                            </label>
-                            <input
-                              id="custom-model-name"
-                              type="text"
-                              aria-label="Nama Model Lokal atau Kustom"
-                              value={customModelName}
-                              onChange={(e) => setCustomModelName(e.target.value)}
-                              placeholder="llama3.3"
-                              className="w-full bg-[#faf9f6] dark:bg-[#0a0c12] focus:bg-white border border-zinc-200/90 dark:border-white/[0.1] rounded-xl px-3.5 py-2 min-h-[38px] text-xs text-[#09090b] dark:text-white placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-[#c4956a]/25 focus:border-[#c4956a] font-mono transition"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="flex gap-2">
-                          <label htmlFor="custom-api-key" className="sr-only">
-                            Kunci API Kustom (Opsional)
-                          </label>
-                          <input
-                            id="custom-api-key"
-                            type={isKeyVisible ? "text" : "password"}
-                            aria-label="Kunci API Kustom (Opsional)"
-                            value={keys["custom"] || ""}
-                            onChange={(e) =>
-                              setKeys((prev) => ({ ...prev, custom: e.target.value }))
-                            }
-                            placeholder="API Key opsional (Bearer token jika endpoint memerlukan sandi)"
-                            className="flex-1 min-w-0 bg-[#faf9f6] dark:bg-[#0a0c12] focus:bg-white border border-zinc-200/90 dark:border-white/[0.1] rounded-xl px-3.5 py-2 min-h-[38px] text-xs text-[#09090b] dark:text-white placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-[#c4956a]/25 focus:border-[#c4956a] font-mono transition"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => toggleKeyVisibility("custom")}
-                            className="p-2 min-w-[38px] min-h-[38px] shrink-0 flex items-center justify-center rounded-xl bg-[#faf9f6] dark:bg-white/[0.04] text-zinc-600 dark:text-zinc-400 hover:text-[#09090b] dark:hover:text-white border border-zinc-200/90 dark:border-white/[0.08] transition cursor-pointer"
-                            title={isKeyVisible ? "Sembunyikan sandi" : "Lihat sandi"}
-                            aria-label={isKeyVisible ? "Sembunyikan sandi" : "Lihat sandi"}
-                          >
-                            {isKeyVisible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleSaveCustomSettings}
-                            className="px-4 py-2 min-h-[38px] rounded-xl bg-[#09090b] dark:bg-white hover:bg-zinc-800 dark:hover:bg-zinc-200 text-white dark:text-[#09090b] text-xs font-bold transition cursor-pointer shrink-0 shadow-sm"
-                          >
-                            Simpan
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      /* Standard Provider API Key Input */
-                      <div className="flex gap-2 pt-1">
-                        <div className="relative flex-1 min-w-0">
-                          <label htmlFor={`api-key-${provider.id}`} className="sr-only">
-                            Kunci API {provider.name}
-                          </label>
-                          <input
-                            id={`api-key-${provider.id}`}
-                            type={isKeyVisible ? "text" : "password"}
-                            aria-label={`Kunci API ${provider.name}`}
-                            value={keys[provider.id] || ""}
-                            onChange={(e) =>
-                              setKeys((prev) => ({ ...prev, [provider.id]: e.target.value }))
-                            }
-                            placeholder={provider.placeholder}
-                            className="w-full bg-[#faf9f6] dark:bg-[#0a0c12] focus:bg-white border border-zinc-200/90 dark:border-white/[0.1] rounded-xl px-3.5 py-2 min-h-[38px] text-xs text-[#09090b] dark:text-white placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-[#c4956a]/25 focus:border-[#c4956a] font-mono transition"
-                          />
-                        </div>
-
+                  {/* Bottom Input & Actions Area */}
+                  <div className="space-y-3 pt-1">
+                    {/* Input Row */}
+                    <div className="flex items-center gap-1.5">
+                      <div className="relative flex-1 min-w-0">
+                        <label htmlFor={`api-key-${provider.id}`} className="sr-only">
+                          Kunci API {provider.name}
+                        </label>
+                        <input
+                          id={`api-key-${provider.id}`}
+                          type={isKeyVisible ? "text" : "password"}
+                          aria-label={`Kunci API ${provider.name}`}
+                          value={keys[provider.id] || ""}
+                          onChange={(e) =>
+                            setKeys((prev) => ({ ...prev, [provider.id]: e.target.value }))
+                          }
+                          placeholder={provider.placeholder}
+                          className="w-full bg-[#faf9f6] dark:bg-[#0a0c12] focus:bg-white dark:focus:bg-[#0d1017] border border-zinc-200/90 dark:border-white/[0.09] rounded-xl pl-3 pr-8 py-1.5 min-h-[34px] text-xs text-[#09090b] dark:text-white placeholder:text-zinc-400 focus:outline-none focus:border-zinc-900 dark:focus:border-white/40 font-mono transition"
+                        />
                         <button
                           type="button"
                           onClick={() => toggleKeyVisibility(provider.id)}
-                          className="p-2 min-w-[38px] min-h-[38px] flex items-center justify-center rounded-xl bg-[#faf9f6] dark:bg-white/[0.04] text-zinc-600 dark:text-zinc-400 hover:text-[#09090b] dark:hover:text-white border border-zinc-200/90 dark:border-white/[0.08] transition cursor-pointer"
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition cursor-pointer"
                           title={isKeyVisible ? "Sembunyikan sandi" : "Lihat sandi"}
-                          aria-label={isKeyVisible ? `Sembunyikan sandi ${provider.name}` : `Lihat sandi ${provider.name}`}
                         >
-                          {isKeyVisible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          {isKeyVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                         </button>
+                      </div>
 
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleSaveKey(
+                            provider.id,
+                            keys[provider.id] || "",
+                            provider.name
+                          )
+                        }
+                        className="px-3 py-1.5 min-h-[34px] rounded-xl bg-[#09090b] dark:bg-white hover:bg-zinc-800 dark:hover:bg-zinc-200 text-white dark:text-[#09090b] text-xs font-semibold transition cursor-pointer shrink-0"
+                      >
+                        Simpan
+                      </button>
+
+                      {hasKey && (
                         <button
                           type="button"
                           onClick={() =>
-                            handleSaveKey(
-                              provider.id,
-                              provider.storageKey,
-                              keys[provider.id] || "",
-                              provider.name
-                            )
+                            handleDeleteKey(provider.id, provider.name)
                           }
-                          className="px-4 py-2 min-h-[38px] rounded-xl bg-[#09090b] dark:bg-white hover:bg-zinc-800 dark:hover:bg-zinc-200 text-white dark:text-[#09090b] text-xs font-bold transition cursor-pointer shrink-0 shadow-sm"
+                          className="p-1.5 min-w-[34px] min-h-[34px] flex items-center justify-center rounded-xl bg-[#faf9f6] dark:bg-white/[0.04] hover:bg-rose-50 dark:hover:bg-rose-950/30 text-zinc-400 hover:text-rose-600 border border-zinc-200/90 dark:border-white/[0.08] transition cursor-pointer shrink-0"
+                          title="Hapus kunci API"
                         >
-                          Simpan
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
+                      )}
+                    </div>
 
-                        {hasKey && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleDeleteKey(provider.id, provider.storageKey, provider.name)
-                            }
-                            className="p-2 min-w-[38px] min-h-[38px] flex items-center justify-center rounded-xl bg-[#faf9f6] dark:bg-white/[0.04] hover:bg-rose-50 dark:hover:bg-rose-950/30 text-zinc-500 hover:text-rose-600 border border-zinc-200/90 dark:border-white/[0.08] transition cursor-pointer"
-                            title="Hapus kunci API ini"
-                            aria-label={`Hapus kunci API ${provider.name}`}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                    {/* Inline Test Result */}
+                    {testResult && (
+                      <div
+                        className={`px-2.5 py-1.5 rounded-xl text-[11px] flex items-center gap-1.5 ${
+                          testResult.success
+                            ? "bg-emerald-50 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-200 border border-emerald-200/70 dark:border-emerald-800/40"
+                            : "bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border border-rose-200/70 dark:border-rose-800/40"
+                        }`}
+                      >
+                        {testResult.success ? (
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                        ) : (
+                          <XCircle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
                         )}
+                        <span className="truncate font-medium">{testResult.msg}</span>
                       </div>
                     )}
 
-                    {/* Bottom Action Row: Test Connection & Set Active Model */}
-                    <div className="pt-3 border-t border-zinc-100 dark:border-white/[0.06] flex flex-wrap items-center justify-between gap-2 text-xs">
-                      <div className="flex items-center gap-2">
+                    {/* Card Footer Bar */}
+                    <div className="pt-2.5 border-t border-zinc-100 dark:border-white/[0.06] flex items-center justify-between gap-2 text-[11px]">
+                      <div className="flex items-center gap-1.5">
                         <button
                           type="button"
                           onClick={() => handleTestConnection(provider)}
                           disabled={isTesting}
-                          className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 hover:text-[#09090b] dark:hover:text-white bg-[#faf9f6] dark:bg-white/[0.04] hover:bg-[#f5f3ef] dark:hover:bg-white/[0.08] border border-zinc-200/80 dark:border-white/[0.08] py-1.5 px-3 min-h-[30px] rounded-full inline-flex items-center gap-1.5 disabled:opacity-40 cursor-pointer transition"
+                          className="font-medium text-zinc-600 dark:text-zinc-300 hover:text-[#09090b] dark:hover:text-white bg-[#faf9f6] dark:bg-white/[0.04] hover:bg-zinc-100 dark:hover:bg-white/[0.08] border border-zinc-200/80 dark:border-white/[0.08] py-1 px-2.5 rounded-lg inline-flex items-center gap-1 disabled:opacity-40 cursor-pointer transition"
                         >
                           {isTesting ? (
                             <>
-                              <Loader2 className="w-3.5 h-3.5 animate-spin text-[#c4956a]" />
-                              <span>Menguji koneksi ke {provider.name}...</span>
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              <span>Uji...</span>
                             </>
                           ) : (
                             <>
-                              <Zap className="w-3.5 h-3.5 text-[#8f5e32] dark:text-[#d4a574]" />
-                              <span>Uji Koneksi API</span>
+                              <Zap className="w-3 h-3" />
+                              <span>Uji</span>
                             </>
                           )}
                         </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setGuideProvider(provider)}
+                          className="font-medium text-zinc-500 dark:text-zinc-400 hover:text-[#09090b] dark:hover:text-white py-1 px-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-white/[0.06] inline-flex items-center gap-1 cursor-pointer transition"
+                        >
+                          <BookOpen className="w-3 h-3" />
+                          <span>Panduan</span>
+                        </button>
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        {isModelSelected ? (
-                          <span className="text-xs font-mono text-[#8f5e32] dark:text-[#d4a574] bg-[#faf4ed] dark:bg-[#c4956a]/15 px-3 py-1 min-h-[30px] rounded-full border border-[#d4a574]/50 flex items-center gap-1.5 font-semibold">
-                            <Check className="w-3.5 h-3.5" />
-                            <span>Aktif di ChatZAP</span>
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleSelectActiveModel(provider.modelId, provider.name)
-                            }
-                            className="text-xs font-semibold text-zinc-600 dark:text-zinc-400 hover:text-[#09090b] dark:hover:text-white px-3 py-1.5 min-h-[30px] rounded-full hover:bg-[#faf9f6] dark:hover:bg-white/[0.05] border border-transparent hover:border-zinc-200/80 transition cursor-pointer"
-                          >
-                            Jadikan Model Aktif
-                          </button>
-                        )}
-                      </div>
+                      {isModelSelected ? (
+                        <span className="font-semibold text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
+                          <Check className="w-3 h-3" />
+                          <span>Model Aktif</span>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleSelectActiveModel(provider.modelId, provider.name)}
+                          className="font-semibold text-zinc-500 dark:text-zinc-400 hover:text-[#09090b] dark:hover:text-white cursor-pointer transition"
+                        >
+                          Pakai Model →
+                        </button>
+                      )}
                     </div>
-
-                    {/* Test Result Message Box */}
-                    {testResult && (
-                      <div
-                        className={`p-3 rounded-2xl text-xs leading-relaxed flex items-start gap-2.5 ${
-                          testResult.success
-                            ? "bg-emerald-50/80 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 text-emerald-900 dark:text-emerald-200"
-                            : "bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/40 text-rose-700 dark:text-rose-300"
-                        }`}
-                      >
-                        {testResult.success ? (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
-                        ) : (
-                          <XCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
-                        )}
-                        <span className="flex-1 font-medium">{testResult.msg}</span>
-                      </div>
-                    )}
                   </div>
                 </div>
               );
@@ -970,41 +851,244 @@ export default function ConnectorPage() {
         </section>
 
         {/* =================================================================== */}
-        {/* SECTION 3: KEAMANAN & PRIVASI (UU PDP & ZERO-ANSWER CONTRACT) */}
+        {/* SECTION 3: OLLAMA LOCAL MODEL & PRIVACY GUARDRAIL (SIDE-BY-SIDE) */}
         {/* =================================================================== */}
-        <section className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-[#0f1118] border border-zinc-200/90 dark:border-white/[0.08] shadow-sm space-y-3 text-xs text-zinc-600 dark:text-zinc-400">
-          <div className="flex items-center gap-2 text-[#09090b] dark:text-white font-bold text-sm">
-            <ShieldCheck className="w-4 h-4 text-[#8f5e32] dark:text-[#d4a574]" />
-            <span>Kepatuhan Privasi Data (UU PDP) &amp; Kontrak Zero-Answer</span>
+        <section className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          {/* Left: Ollama / vLLM / LM Studio Local Endpoint (7 Cols) */}
+          <div className="lg:col-span-7 rounded-2xl bg-white dark:bg-[#11131a] border border-zinc-200/90 dark:border-white/[0.08] p-5 flex flex-col justify-between gap-4 shadow-2xs">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-purple-500/10 dark:bg-purple-500/15 border border-purple-500/25 flex items-center justify-center shrink-0 shadow-2xs">
+                  <OllamaLogo className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-[#09090b] dark:text-white">
+                      {customProvider.name}
+                    </h3>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-white/[0.06] text-zinc-600 dark:text-zinc-300 font-medium">
+                      {customProvider.badge}
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                    {customProvider.shortDesc}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setGuideProvider(customProvider)}
+                className="text-xs font-medium text-zinc-500 dark:text-zinc-400 hover:text-[#09090b] dark:hover:text-white py-1 px-2.5 rounded-lg bg-[#faf9f6] dark:bg-white/[0.04] border border-zinc-200/80 dark:border-white/[0.08] inline-flex items-center gap-1 cursor-pointer transition shrink-0"
+              >
+                <BookOpen className="w-3 h-3" />
+                <span>Panduan</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div>
+                <label className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 block mb-1">
+                  Endpoint URL
+                </label>
+                <input
+                  type="text"
+                  value={customBaseUrl}
+                  onChange={(e) => setCustomBaseUrl(e.target.value)}
+                  placeholder="http://localhost:11434/v1"
+                  className="w-full bg-[#faf9f6] dark:bg-[#0a0c12] border border-zinc-200/90 dark:border-white/[0.09] rounded-xl px-3 py-1.5 min-h-[34px] text-xs text-[#09090b] dark:text-white font-mono focus:outline-none focus:border-zinc-900 dark:focus:border-white/40"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 block mb-1">
+                  Nama Model
+                </label>
+                <input
+                  type="text"
+                  value={customModelName}
+                  onChange={(e) => setCustomModelName(e.target.value)}
+                  placeholder="llama3.3"
+                  className="w-full bg-[#faf9f6] dark:bg-[#0a0c12] border border-zinc-200/90 dark:border-white/[0.09] rounded-xl px-3 py-1.5 min-h-[34px] text-xs text-[#09090b] dark:text-white font-mono focus:outline-none focus:border-zinc-900 dark:focus:border-white/40"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 block mb-1">
+                  API Key (Opsional)
+                </label>
+                <input
+                  type="password"
+                  value={keys["custom"] || ""}
+                  onChange={(e) => setKeys((prev) => ({ ...prev, custom: e.target.value }))}
+                  placeholder="Bearer token..."
+                  className="w-full bg-[#faf9f6] dark:bg-[#0a0c12] border border-zinc-200/90 dark:border-white/[0.09] rounded-xl px-3 py-1.5 min-h-[34px] text-xs text-[#09090b] dark:text-white font-mono focus:outline-none focus:border-zinc-900 dark:focus:border-white/40"
+                />
+              </div>
+            </div>
+
+            {testResults["custom"] && (
+              <div
+                className={`px-3 py-2 rounded-xl text-xs flex items-center gap-2 ${
+                  testResults["custom"].success
+                    ? "bg-emerald-50 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-200 border border-emerald-200/70"
+                    : "bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border border-rose-200/70"
+                }`}
+              >
+                {testResults["custom"].success ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                ) : (
+                  <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                )}
+                <span>{testResults["custom"].msg}</span>
+              </div>
+            )}
+
+            <div className="pt-2.5 border-t border-zinc-100 dark:border-white/[0.06] flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveCustomSettings}
+                  className="px-3.5 py-1.5 rounded-xl bg-[#09090b] dark:bg-white hover:bg-zinc-800 dark:hover:bg-zinc-200 text-white dark:text-[#09090b] text-xs font-semibold transition cursor-pointer"
+                >
+                  Simpan Konfigurasi Lokal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleTestConnection(customProvider)}
+                  disabled={testingProviderId === "custom"}
+                  className="px-3 py-1.5 rounded-xl bg-[#faf9f6] dark:bg-white/[0.04] hover:bg-zinc-100 dark:hover:bg-white/[0.08] border border-zinc-200/80 dark:border-white/[0.08] text-xs font-medium text-zinc-700 dark:text-zinc-300 inline-flex items-center gap-1.5 cursor-pointer transition"
+                >
+                  <Zap className="w-3 h-3" />
+                  <span>Uji Endpoint</span>
+                </button>
+              </div>
+
+              {activeModelId === customProvider.modelId ? (
+                <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Aktif</span>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => handleSelectActiveModel(customProvider.modelId, customProvider.name)}
+                  className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 hover:text-[#09090b] dark:hover:text-white cursor-pointer transition"
+                >
+                  Pakai Model Lokal →
+                </button>
+              )}
+            </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1 leading-relaxed">
-            <div className="p-3.5 rounded-2xl bg-[#faf9f6] dark:bg-white/[0.03] border border-zinc-200/70 dark:border-white/[0.06]">
-              <div className="font-bold text-[#09090b] dark:text-white mb-1">
-                1. Penyimpanan Lokal &amp; Cadangan Akun
+
+          {/* Right: Privacy & SymPy Guardrail Summary (5 Cols) */}
+          <div className="lg:col-span-5 rounded-2xl bg-white dark:bg-[#11131a] border border-zinc-200/90 dark:border-white/[0.08] p-5 flex flex-col justify-between gap-3 shadow-2xs">
+            <div className="space-y-2.5">
+              <div className="flex items-center gap-2 text-[#09090b] dark:text-white font-bold text-sm">
+                <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>Privasi BYOK &amp; Kontrak Zero-Answer</span>
               </div>
-              <p>
-                Semua kunci API BYOK disimpan di peramban komputer Anda (localStorage). Jika Anda masuk dengan akun, salinan cadangan konfigurasi Anda, termasuk kunci API, disinkronkan ke vault akun di server agar dapat dipulihkan saat berganti perangkat.
-              </p>
+
+              <div className="space-y-2 text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                <div className="p-2.5 rounded-xl bg-[#faf9f6] dark:bg-white/[0.03] border border-zinc-200/60 dark:border-white/[0.05]">
+                  <strong className="text-[#09090b] dark:text-zinc-200">Penyimpanan Browser &amp; Sinkronisasi:</strong>{" "}
+                  Kunci API disimpan di <code className="font-mono text-[10px]">sessionStorage</code> dengan
+                  namespace akun Anda, lalu dicadangkan ke akun sebagai ciphertext AES-GCM (zero-knowledge)
+                  bila vault terenkripsi aktif. Server tidak memiliki passphrase/kunci untuk membukanya.
+                </div>
+                <div className="p-2.5 rounded-xl bg-[#faf9f6] dark:bg-white/[0.03] border border-zinc-200/60 dark:border-white/[0.05]">
+                  <strong className="text-[#09090b] dark:text-zinc-200">Arbitrase Aljabar SymPy (&lt; 1 ms):</strong>{" "}
+                  Validasi langkah matematika tetap dikerjakan oleh mesin simbolik deterministik sebelum LLM merespons.
+                </div>
+              </div>
             </div>
-            <div className="p-3.5 rounded-2xl bg-[#faf9f6] dark:bg-white/[0.03] border border-zinc-200/70 dark:border-white/[0.06]">
-              <div className="font-bold text-[#09090b] dark:text-white mb-1">
-                2. Arbitrase SymPy CAS (&lt; 1 ms)
-              </div>
-              <p>
-                Mesin simbolik SymPy CAS menguji kebenaran aljabar secara deterministik sebelum model LLM merumuskan pertanyaan Sokrates.
-              </p>
-            </div>
-            <div className="p-3.5 rounded-2xl bg-[#faf9f6] dark:bg-white/[0.03] border border-zinc-200/70 dark:border-white/[0.06]">
-              <div className="font-bold text-[#09090b] dark:text-white mb-1">
-                3. Kendali &amp; Penghapusan Instan
-              </div>
-              <p>
-                Anda dapat menghapus atau mengganti kunci API kapan saja dengan menekan ikon tempat sampah pada kartu penyedia terkait.
-              </p>
+
+            <div className="pt-2 border-t border-zinc-100 dark:border-white/[0.06] flex items-center justify-between text-[11px] text-zinc-400">
+              <span>Standar Privasi UU PDP</span>
+              <Link
+                href="/chat"
+                className="font-semibold text-[#09090b] dark:text-white hover:underline inline-flex items-center gap-1"
+              >
+                <span>Mulai Sesi ChatZAP</span>
+                <ArrowRight className="w-3 h-3" />
+              </Link>
             </div>
           </div>
         </section>
       </main>
+
+      {/* =================================================================== */}
+      {/* MODAL: PANDUAN KUNCI API (CLEAN DIALOG) */}
+      {/* =================================================================== */}
+      {guideProvider && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => setGuideProvider(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl bg-white dark:bg-[#12141c] border border-zinc-200 dark:border-white/[0.08] shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-zinc-100 dark:border-white/[0.06] flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-[#faf9f6] dark:bg-white/[0.05] border border-zinc-200/80 dark:border-white/[0.08] flex items-center justify-center">
+                  <Key className="w-4 h-4 text-zinc-700 dark:text-zinc-300" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-[#09090b] dark:text-white">
+                    Panduan {guideProvider.name}
+                  </h3>
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                    Langkah mendapatkan kunci API resmi
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setGuideProvider(null)}
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-zinc-400 hover:text-zinc-700 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-white/[0.06] transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <ol className="space-y-2 text-zinc-600 dark:text-zinc-300 list-decimal list-inside leading-relaxed">
+                {guideProvider.tutorialSteps.map((step, idx) => (
+                  <li key={idx} className="pl-1">
+                    <span className="text-zinc-800 dark:text-zinc-200">{step}</span>
+                  </li>
+                ))}
+              </ol>
+
+              {guideProvider.note && (
+                <div className="p-3 rounded-xl bg-[#faf9f6] dark:bg-white/[0.03] border border-zinc-200/70 dark:border-white/[0.06] text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                  {guideProvider.note}
+                </div>
+              )}
+
+              <div className="pt-2 flex items-center justify-between gap-2">
+                <a
+                  href={guideProvider.docUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3.5 py-2 rounded-xl bg-[#09090b] dark:bg-white text-white dark:text-[#09090b] font-semibold inline-flex items-center gap-1.5 hover:opacity-90 transition"
+                >
+                  <span>Buka {guideProvider.docLabel}</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setGuideProvider(null)}
+                  className="px-3.5 py-2 rounded-xl border border-zinc-200 dark:border-white/[0.08] text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-white/[0.05] font-medium transition cursor-pointer"
+                >
+                  Tutup
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <SiteFooter />
     </div>
   );
 }

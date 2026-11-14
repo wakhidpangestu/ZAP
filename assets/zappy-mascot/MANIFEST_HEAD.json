@@ -1,0 +1,119 @@
+{
+  "asset": "ZAPPY_head",
+  "kind": "character head / face kit, 3D",
+  "generator": "build_zapy_head.py (imports head geometry from build_zapy.py)",
+  "provenance": {
+    "method": "procedurally authored mesh",
+    "paid_provider_used": null,
+    "blender_used": false,
+    "note": "Same head geometry as the full-body asset; no 3D provider was called."
+  },
+  "units": "metres",
+  "up_axis": "Y",
+  "forward_axis": "+Z",
+  "origin": "bottom of the neck stump (sits on y = 0)",
+  "palette": {
+    "cream": {
+      "hex": "#FFF8F0",
+      "roughness": 0.62,
+      "metallic": 0.0
+    },
+    "cream_shade": {
+      "hex": "#EDD3B0",
+      "roughness": 0.7,
+      "metallic": 0.0
+    },
+    "orange": {
+      "hex": "#EE8B3C",
+      "roughness": 0.55,
+      "metallic": 0.0
+    },
+    "orange_deep": {
+      "hex": "#D9702A",
+      "roughness": 0.52,
+      "metallic": 0.0
+    },
+    "ink": {
+      "hex": "#2B1F17",
+      "roughness": 0.32,
+      "metallic": 0.0
+    },
+    "blush": {
+      "hex": "#F5AE8C",
+      "roughness": 0.72,
+      "metallic": 0.0
+    },
+    "white": {
+      "hex": "#FFFFFF",
+      "roughness": 0.25,
+      "metallic": 0.0
+    }
+  },
+  "geometry": {
+    "triangles_per_expression": 20904,
+    "vertices_per_expression": 11756,
+    "parts": [
+      "Head",
+      "EarL",
+      "EarR",
+      "EyeL",
+      "EyeR"
+    ]
+  },
+  "expressions": {
+    "neutral": {
+      "mouth": "smile",
+      "file": "out/zapy_head_neutral.glb",
+      "bytes": 413992,
+      "sha256": "cba5846dff11ea48"
+    },
+    "happy": {
+      "mouth": "wide",
+      "file": "out/zapy_head_happy.glb",
+      "bytes": 414152,
+      "sha256": "d0c8bbdf3d8d382f"
+    },
+    "laugh": {
+      "mouth": "open",
+      "file": "out/zapy_head_laugh.glb",
+      "bytes": 433496,
+      "sha256": "adde9741d4952012"
+    },
+    "wink": {
+      "mouth": "smile",
+      "file": "out/zapy_head_wink.glb",
+      "bytes": 414088,
+      "sha256": "7a2e6ef949743aba"
+    },
+    "sleepy": {
+      "mouth": "flat",
+      "file": "out/zapy_head_sleepy.glb",
+      "bytes": 413300,
+      "sha256": "672dc3d593157691"
+    },
+    "surprised": {
+      "mouth": "open",
+      "file": "out/zapy_head_surprised.glb",
+      "bytes": 433508,
+      "sha256": "b6585bc6518cc5ba"
+    },
+    "thinking": {
+      "mouth": "flat",
+      "file": "out/zapy_head_thinking.glb",
+      "bytes": 413240,
+      "sha256": "8148fe2ed100400f"
+    },
+    "shy": {
+      "mouth": "smile",
+      "file": "out/zapy_head_shy.glb",
+      "bytes": 414160,
+      "sha256": "2a1d7d90168aa9ca"
+    }
+  },
+  "face_sheet": {
+    "file": "out/zapy_heads.glb",
+    "bytes": 2349056,
+    "sha256": "fa5f0692b7583340"
+  },
+  "generated_utc": "2026-11-13T21:23:15+00:00"
+}

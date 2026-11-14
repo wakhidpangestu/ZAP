@@ -6,6 +6,7 @@ Provides indexed access to 2D shapes, 3D solids, 2D nets, formulas, and KaTeX no
 import os
 import json
 import math
+import re
 from typing import Dict, Any, Optional, List
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "zap_geometry_database.json")
@@ -45,36 +46,43 @@ class GeometryDatabase:
 
     def resolve_intent(self, text: str) -> Optional[Dict[str, Any]]:
         t = text.lower().strip()
-        has_2d = any(k in t for k in ["2d", "2-d", "dua dimensi", "bangun datar", "jaring-jaring", "jaring jaring", "alas"])
-        has_3d = any(k in t for k in ["3d", "3-d", "tiga dimensi", "bangun ruang", "ruang", "solid"])
+        if not t or len(t) > 500:
+            return None
+
+        has_2d = bool(re.search(r"\b(2d|2-d|dua dimensi|bangun datar|jaring-jaring|jaring jaring)\b", t))
+        has_3d = bool(re.search(r"\b(3d|3-d|tiga dimensi|bangun ruang|ruang 3d|solid 3d)\b", t))
+        has_visual_cmd = bool(re.search(r"\b(buatkan|buatin|buat|bikinin|bikin|tampilkan|gambarkan|gambar|visualisasikan|render|modelkan|buka|lihat|plot)\b", t))
+
+        def has_alias(item: Dict[str, Any]) -> bool:
+            return any(bool(re.search(r"\b" + re.escape(alias.strip().lower()) + r"\b", t)) for alias in item.get("aliases", []))
 
         # Prioritas 2D
-        if has_2d:
-            if "prisma" in t:
+        if has_2d or "jaring" in t:
+            if re.search(r"\b(prisma|prism)\b", t):
                 return self.get_shape("jaring_prisma")
-            if "kubus" in t:
+            if re.search(r"\b(kubus|cube)\b", t):
                 return self.get_shape("jaring_kubus")
-            if "limas" in t or "piramid" in t:
+            if re.search(r"\b(limas|piramida|piramid|pyramid)\b", t):
                 return self.get_shape("jaring_limas")
-            if "balok" in t:
+            if re.search(r"\b(balok|cuboid)\b", t):
                 return self.get_shape("jaring_balok")
-            if "tabung" in t:
+            if re.search(r"\b(tabung|silinder|cylinder)\b", t):
                 return self.get_shape("jaring_tabung")
 
             for item in self.data.get("shapes_2d", []):
-                if any(alias in t for alias in item["aliases"]):
+                if has_alias(item):
                     return item
 
-        # Prioritas 3D
-        if has_3d or not has_2d:
+        # Prioritas 3D (hanya jika ada kata kunci 3D atau perintah visualisasi)
+        if has_3d or has_visual_cmd:
             for item in self.data.get("shapes_3d", []):
-                if any(alias in t for alias in item["aliases"]):
+                if has_alias(item):
                     return item
 
-        # Cek sisa bangun datar
-        for item in self.data.get("shapes_2d", []):
-            if any(alias in t for alias in item["aliases"]):
-                return item
+            # Cek sisa bangun datar
+            for item in self.data.get("shapes_2d", []):
+                if has_alias(item):
+                    return item
 
         return None
 

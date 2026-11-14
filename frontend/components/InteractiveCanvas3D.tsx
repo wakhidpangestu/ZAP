@@ -21,7 +21,6 @@ import {
   Eye,
   EyeOff,
   Type,
-  Move,
   Edit3,
   Send,
   Check,
@@ -30,6 +29,8 @@ import {
   Users,
   Copy,
   LogOut,
+  ImagePlus,
+  CircleDot,
 } from "lucide-react";
 import { useTheme } from "@/utils/theme";
 import MathView from "@/components/MathView";
@@ -83,6 +84,15 @@ export interface BoardFormulaItem {
   color?: "default" | "amber" | "emerald" | "blue" | "rose" | "purple";
   fontSize?: "sm" | "base" | "lg" | "xl";
   kind?: "math" | "text";
+}
+
+export interface BoardImageItem {
+  id: string;
+  dataUrl: string;
+  x: number; // percentage 0-100% dari lebar kanvas
+  y: number; // percentage 0-100% dari tinggi kanvas
+  width: number; // lebar dalam px (default 240)
+  name?: string;
 }
 
 /**
@@ -225,6 +235,30 @@ export const FORMULA_TEMPLATES = [
   { name: "Identitas Trigonometri", latex: "\\sin^2(\\theta) + \\cos^2(\\theta) = 1" },
 ];
 
+export type CanvasPreviewScene = {
+  model: MathModelType;
+  solidKind?: SolidKind;
+  a?: number;
+  b?: number;
+  c?: number;
+};
+
+export type CanvasPreviewConfig = {
+  /** Scene yang ditampilkan; berubah = model/parameter ikut berganti. */
+  scene?: CanvasPreviewScene;
+  /** Nyalakan rotasi otomatis sejak frame pertama. */
+  autoRotate?: boolean;
+  /** > 1 = kamera lebih dekat sehingga objek 3D tampak lebih besar. */
+  cameraZoom?: number;
+  /** Jangan tangkap roda mouse (biarkan halaman landing tetap bisa digulir). */
+  disableWheel?: boolean;
+  /**
+   * Pratinjau: tab 3D/2D/Papan memanggil ini alih-alih membuka mode kosong,
+   * agar objek (kubus/kurva/papan) tetap ada saat pengunjung berpindah tab.
+   */
+  onSceneChange?: (id: "3d" | "2d" | "papan") => void;
+};
+
 interface InteractiveCanvas3DProps {
   initialModel?: MathModelType;
   initialSolidKind?: SolidKind;
@@ -244,6 +278,32 @@ interface InteractiveCanvas3DProps {
   onToggleProjector?: () => void;
   onClose?: () => void;
   collabName?: string;
+  /**
+   * Panel induk dapat meminta render loop 3D berhenti sementara (mis. panel
+   * kanan ditutup / tab kanvas tidak aktif) tanpa meng-unmount komponen.
+   * Loop juga otomatis berhenti saat kanvas keluar viewport, tab browser
+   * disembunyikan, atau mode bukan 3D.
+   */
+  paused?: boolean;
+  /**
+   * Pratinjau (landing): sembunyikan kartu HUD metrik & kontrol (mis. "Kubus 3D")
+   * beserta tombol mata di dock, supaya panel mock tidak penuh.
+   */
+  hideHud?: boolean;
+  /** Pratinjau (landing): jangan render widget ZAP Copilot di kanan bawah. */
+  hideCopilot?: boolean;
+  /**
+   * Pratinjau (landing): lewati penggambaran WebGL selama halaman digulir.
+   * Diimplementasikan lewat ref (tanpa setState) supaya tidak memicu re-render
+   * pohon komponen yang besar di setiap awal/akhir gulir.
+   */
+  pauseOnScroll?: boolean;
+  /**
+   * Konfigurasi khusus pratinjau landing: scene yang bisa berganti (kubus 3D,
+   * grafik 2D, papan tulis), rotasi otomatis, zoom kamera, dan roda mouse
+   * diteruskan ke halaman agar scroll landing tidak tertahan.
+   */
+  preview?: CanvasPreviewConfig;
 }
 
 const GRID_Y = -1.5;
@@ -405,6 +465,11 @@ export default function InteractiveCanvas3D({
   onToggleProjector,
   onClose,
   collabName = "Tamu",
+  paused = false,
+  hideHud = false,
+  hideCopilot = false,
+  pauseOnScroll = false,
+  preview,
 }: InteractiveCanvas3DProps) {
   // Main mode: "empty" | "2d_graph" | "3d_model"
   const [activeModel, setActiveModel] = useState<MathModelType>(initialModel);
@@ -467,6 +532,253 @@ export default function InteractiveCanvas3D({
     }
   }, [formulaNotes]);
 
+  // On-Canvas Direct Typing & Selection State
+  const [isTypingToolActive, setIsTypingToolActive] = useState(false);
+  const [selectedFormulaId, setSelectedFormulaId] = useState<string | null>(null);
+
+  // Pasted / Dropped Images on Smartboard
+  const [boardImages, setBoardImages] = useState<BoardImageItem[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = sessionStorage.getItem("zap_board_images");
+        if (saved) return JSON.parse(saved);
+      } catch {
+        // ignore
+      }
+    }
+    return [];
+  });
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
+  const [clipboardToast, setClipboardToast] = useState<string | null>(null);
+  const boardImageInputRef = useRef<HTMLInputElement | null>(null);
+  const lastBoardPointerPctRef = useRef<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        sessionStorage.setItem("zap_board_images", JSON.stringify(boardImages));
+      } catch {
+        // ignore
+      }
+    }
+  }, [boardImages]);
+
+  const showBoardClipboardToast = useCallback((msg: string) => {
+    setClipboardToast(msg);
+    setTimeout(() => {
+      setClipboardToast((prev) => (prev === msg ? null : prev));
+    }, 2400);
+  }, []);
+
+  const addDataUrlImageToBoard = useCallback(
+    (dataUrl: string, name?: string, pctX?: number, pctY?: number) => {
+      if (!dataUrl || !dataUrl.startsWith("data:image/")) return;
+      const newId = `img_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      const fallbackOffset = (boardImages.length % 5) * 4;
+      const targetX =
+        pctX !== undefined
+          ? Math.max(2, Math.min(72, pctX))
+          : lastBoardPointerPctRef.current
+          ? Math.max(2, Math.min(72, lastBoardPointerPctRef.current.x))
+          : 22 + fallbackOffset;
+      const targetY =
+        pctY !== undefined
+          ? Math.max(4, Math.min(72, pctY))
+          : lastBoardPointerPctRef.current
+          ? Math.max(4, Math.min(72, lastBoardPointerPctRef.current.y))
+          : 18 + fallbackOffset;
+
+      const newItem: BoardImageItem = {
+        id: newId,
+        dataUrl,
+        x: targetX,
+        y: targetY,
+        width: 240,
+        name: name || "Gambar Papan",
+      };
+      setBoardImages((prev) => [...prev, newItem]);
+      setSelectedImageId(newId);
+      setSelectedFormulaId(null);
+      showBoardClipboardToast("Gambar ditempel ke Papan Tulis");
+    },
+    [boardImages.length, showBoardClipboardToast]
+  );
+
+  const addImageFileToBoard = useCallback(
+    (file: File, pctX?: number, pctY?: number) => {
+      if (!file.type.startsWith("image/")) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === "string") {
+          addDataUrlImageToBoard(reader.result, file.name, pctX, pctY);
+        }
+      };
+      reader.readAsDataURL(file);
+    },
+    [addDataUrlImageToBoard]
+  );
+
+  const copyDataUrlToClipboard = useCallback(
+    async (dataUrl: string, toastMsg = "Gambar disalin ke Clipboard (Ctrl+V)") => {
+      try {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = () => reject(new Error("Gagal memuat gambar"));
+          img.src = dataUrl;
+        });
+        const offCanvas = document.createElement("canvas");
+        offCanvas.width = img.naturalWidth || img.width || 600;
+        offCanvas.height = img.naturalHeight || img.height || 400;
+        const ctx = offCanvas.getContext("2d");
+        if (!ctx) throw new Error("No 2D context");
+        ctx.drawImage(img, 0, 0);
+        const blob = await new Promise<Blob | null>((resolve) =>
+          offCanvas.toBlob((b) => resolve(b), "image/png")
+        );
+        if (blob && typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+          showBoardClipboardToast(toastMsg);
+          return;
+        }
+      } catch {
+        // Fallback if ClipboardItem is restricted
+      }
+      try {
+        await navigator.clipboard.writeText(dataUrl);
+        showBoardClipboardToast(toastMsg);
+      } catch {}
+    },
+    [showBoardClipboardToast]
+  );
+
+  const copySmartboardSnapshotToClipboard = useCallback(async () => {
+    const boardEl = boardWorkspaceRef.current;
+    if (!boardEl) return;
+    const w = boardEl.clientWidth || 800;
+    const h = boardEl.clientHeight || 600;
+    const outCanvas = document.createElement("canvas");
+    outCanvas.width = w;
+    outCanvas.height = h;
+    const ctx = outCanvas.getContext("2d");
+    if (!ctx) return;
+
+    // 1. Background
+    ctx.fillStyle = isProjectorMode ? "#0c101d" : isDark ? "#080a0f" : "#f8fafc";
+    ctx.fillRect(0, 0, w, h);
+
+    // 2. Active 2D or 3D viewport
+    if (
+      activeModel === "2d_empty" ||
+      activeModel === "2d_shape" ||
+      activeModel === "2d_quadratic" ||
+      activeModel === "2d_trig" ||
+      activeModel === "2d_linear" ||
+      activeModel === "2d_circle"
+    ) {
+      if (graph2DCanvasRef.current) {
+        ctx.drawImage(graph2DCanvasRef.current, 0, 0, w, h);
+      }
+    } else if (activeModel !== "empty" && rendererRef.current && sceneRef.current && cameraRef.current) {
+      try {
+        rendererRef.current.render(sceneRef.current, cameraRef.current);
+        ctx.drawImage(rendererRef.current.domElement, 0, 0, w, h);
+      } catch {}
+    }
+
+    // 3. Pasted images on board
+    for (const item of boardImages) {
+      try {
+        const img = new Image();
+        await new Promise<void>((res) => {
+          img.onload = () => res();
+          img.onerror = () => res();
+          img.src = item.dataUrl;
+        });
+        if (img.naturalWidth > 0) {
+          const aspect = img.naturalHeight / img.naturalWidth;
+          const drawW = item.width;
+          const drawH = drawW * aspect;
+          const drawX = (item.x / 100) * w;
+          const drawY = (item.y / 100) * h;
+          ctx.drawImage(img, drawX, drawY, drawW, drawH);
+        }
+      } catch {}
+    }
+
+    // 4. Freehand chalk drawings
+    if (drawCanvasRef.current) {
+      ctx.drawImage(drawCanvasRef.current, 0, 0, w, h);
+    }
+
+    const dataUrl = outCanvas.toDataURL("image/png");
+    await copyDataUrlToClipboard(dataUrl, "Tangkapan gambar Papan Tulis disalin (Ctrl+V)");
+  }, [activeModel, boardImages, copyDataUrlToClipboard, isDark, isProjectorMode]);
+
+  const handleDeleteBoardImage = useCallback((id: string) => {
+    setBoardImages((prev) => prev.filter((img) => img.id !== id));
+    setSelectedImageId((prev) => (prev === id ? null : prev));
+  }, []);
+
+  const handleImagePointerDown = (id: string, e: React.PointerEvent) => {
+    e.stopPropagation();
+    const boardEl = boardWorkspaceRef.current;
+    if (!boardEl) return;
+    const boardRect = boardEl.getBoundingClientRect();
+    const imgItem = boardImages.find((i) => i.id === id);
+    if (!imgItem) return;
+
+    const startClientX = e.clientX;
+    const startClientY = e.clientY;
+    const startPctX = imgItem.x;
+    const startPctY = imgItem.y;
+
+    const onPointerMove = (moveEvt: PointerEvent) => {
+      const dxPct = ((moveEvt.clientX - startClientX) / boardRect.width) * 100;
+      const dyPct = ((moveEvt.clientY - startClientY) / boardRect.height) * 100;
+      const nextX = Math.max(0, Math.min(88, startPctX + dxPct));
+      const nextY = Math.max(0, Math.min(88, startPctY + dyPct));
+      setBoardImages((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, x: nextX, y: nextY } : item))
+      );
+    };
+
+    const onPointerUp = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+  };
+
+  const handleImageResizePointerDown = (id: string, e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const imgItem = boardImages.find((i) => i.id === id);
+    if (!imgItem) return;
+
+    const startClientX = e.clientX;
+    const startWidth = imgItem.width;
+
+    const onPointerMove = (moveEvt: PointerEvent) => {
+      const dx = moveEvt.clientX - startClientX;
+      const nextWidth = Math.max(80, Math.min(680, Math.round(startWidth + dx)));
+      setBoardImages((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, width: nextWidth } : item))
+      );
+    };
+
+    const onPointerUp = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+  };
+
   // KaTeX Formula Composer Modal State
   const [isFormulaModalOpen, setIsFormulaModalOpen] = useState(false);
   const [editingFormulaId, setEditingFormulaId] = useState<string | null>(null);
@@ -480,9 +792,7 @@ export default function InteractiveCanvas3D({
   const [aiWidgetInput, setAiWidgetInput] = useState("");
   const [aiWidgetFeedback, setAiWidgetFeedback] = useState<string | null>(null);
 
-  // On-Canvas Direct Typing & Selection State
-  const [isTypingToolActive, setIsTypingToolActive] = useState(false);
-  const [selectedFormulaId, setSelectedFormulaId] = useState<string | null>(null);
+  // Computed selection state for formula notes
   const selectedNote = formulaNotes.find((n) => n.id === selectedFormulaId) || null;
   const selectedNoteIsMath = selectedNote
     ? selectedNote.kind
@@ -521,6 +831,21 @@ export default function InteractiveCanvas3D({
     text: string;
     id?: string;
   } | null>(null);
+  const inlineInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!inlineComposer) return;
+    const raf = requestAnimationFrame(() => {
+      inlineInputRef.current?.focus();
+    });
+    const timer = setTimeout(() => {
+      inlineInputRef.current?.focus();
+    }, 30);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(timer);
+    };
+  }, [inlineComposer?.x, inlineComposer?.y, inlineComposer?.id]);
 
   // Drag selection marquee (lasso / drag to select components)
   const [selectionMarquee, setSelectionMarquee] = useState<{
@@ -559,10 +884,23 @@ export default function InteractiveCanvas3D({
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
   const mouseVecRef = useRef<THREE.Vector2>(new THREE.Vector2());
 
+  // Render loop 3D yang bisa dihentikan/dilanjutkan tanpa membangun ulang
+  // scene: start()/stop() dipasang oleh effect inisialisasi Three.js.
+  const renderLoopControlRef = useRef<{ start: () => void; stop: () => void } | null>(null);
+  // True saat halaman sedang digulir (dipakai `pauseOnScroll`). Ref, bukan state,
+  // supaya tidak memicu re-render di setiap awal/akhir gulir.
+  const scrollRenderPausedRef = useRef(false);
+  // Loop dijeda saat: diminta parent (paused), kanvas di luar viewport,
+  // tab browser tidak terlihat, atau kanvas tidak sedang menampilkan mode 3D.
+  const [isPageHidden, setIsPageHidden] = useState(false);
+  const [isCanvasInView, setIsCanvasInView] = useState(true);
+
   // 3D State
-  const [autoRotate, setAutoRotate] = useState(false);
+  const [autoRotate, setAutoRotate] = useState(Boolean(preview?.autoRotate));
   const [wireframe, setWireframe] = useState(false);
   const [solidKind, setSolidKind] = useState<SolidKind>(initialSolidKind || "kubus");
+  const [showHandles, setShowHandles] = useState<boolean>(true);
+  const showHandlesRef = useRef<boolean>(true);
 
   // Dynamic Math Parameters (A, B, C) & Unit (cm, m)
   const [paramA, setParamA] = useState(initialParamA !== undefined ? initialParamA : 10);
@@ -595,13 +933,45 @@ export default function InteractiveCanvas3D({
     isDrawingToolActiveRef.current = isDrawingToolActive;
   }, [isDrawingToolActive]);
 
+  useEffect(() => {
+    showHandlesRef.current = showHandles;
+    cornerHandlesRef.current.forEach((h) => {
+      h.visible = showHandles;
+    });
+    if (!showHandles && hoveredCornerRef.current) {
+      hoveredCornerRef.current.scale.set(1, 1, 1);
+      const m = hoveredCornerRef.current.material as THREE.MeshStandardMaterial;
+      if (m && m.emissive) {
+        m.emissive.setHex(0x38bdf8);
+        m.emissiveIntensity = 0.4;
+      }
+      hoveredCornerRef.current = null;
+    }
+  }, [showHandles]);
+
   // Cutting plane: NOT on by default! Only active if user requests or toggles it
   const [showSlicePlane, setShowSlicePlane] = useState<boolean>(Boolean(initialShowSlice));
   const [sliceProgress, setSliceProgress] = useState(0.5);
 
   // HUD card minimize / hide feature
-  const [isHudVisible, setIsHudVisible] = useState<boolean>(true);
+  const [isHudVisible, setIsHudVisible] = useState<boolean>(!hideHud);
   const [isHudMinimized, setIsHudMinimized] = useState<boolean>(false);
+
+  // Ukuran ikon dock yang menyesuaikan lebar papan (agar tetap muat di panel sempit)
+  const [dockBaseSize, setDockBaseSize] = useState(38);
+  useEffect(() => {
+    const el = boardWorkspaceRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const apply = (width: number) =>
+      setDockBaseSize(width < 420 ? 30 : width < 520 ? 33 : width < 620 ? 35 : 38);
+    apply(el.getBoundingClientRect().width);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) apply(entry.contentRect.width);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     setActiveModel(initialModel);
@@ -646,13 +1016,58 @@ export default function InteractiveCanvas3D({
     if (initialShowSlice !== undefined) setShowSlicePlane(initialShowSlice);
   }, [initialParamA, initialParamB, initialParamC, initialUnit, initialShowSlice]);
 
+  // Memori model terakhir per tab agar objek di 3D / 2D / Papan tidak hilang saat berpindah tab
+  const last3DModelRef = useRef<MathModelType>(
+    initialModel && initialModel !== "empty" && initialModel !== "2d_empty" && !initialModel.startsWith("2d_")
+      ? initialModel
+      : "3d_empty"
+  );
+  const last2DModelRef = useRef<MathModelType>(
+    initialModel && (initialModel === "2d_empty" || initialModel.startsWith("2d_"))
+      ? initialModel
+      : "2d_empty"
+  );
+
   const selectModel = useCallback(
     (model: MathModelType) => {
       setActiveModel(model);
+      if (
+        model === "solids" ||
+        model === "cylinder" ||
+        model === "conic_slicer" ||
+        model === "saddle" ||
+        model === "counting_blocks" ||
+        model === "parabola" ||
+        model === "surface" ||
+        model === "3d_empty"
+      ) {
+        last3DModelRef.current = model;
+      } else if (
+        model === "2d_shape" ||
+        model === "2d_quadratic" ||
+        model === "2d_linear" ||
+        model === "2d_circle" ||
+        model === "2d_trig" ||
+        model === "2d_empty"
+      ) {
+        last2DModelRef.current = model;
+      }
       onModelChange?.(model);
     },
     [onModelChange]
   );
+
+  // Pratinjau landing: ganti scene (model + parameter) saat prop berubah.
+  // Parameter ikut diset agar kubus 6 cm dan kurva y = x² − 3 tetap benar.
+  const previewScene = preview?.scene;
+  useEffect(() => {
+    if (!previewScene) return;
+    if (previewScene.solidKind) setSolidKind(previewScene.solidKind);
+    if (previewScene.a !== undefined) setParamA(previewScene.a);
+    if (previewScene.b !== undefined) setParamB(previewScene.b);
+    if (previewScene.c !== undefined) setParamC(previewScene.c);
+    selectModel(previewScene.model);
+  }, [previewScene, selectModel]);
 
   // =========================================================================
   // 1. FREEHAND DRAWING CANVAS (CORET-CORET)
@@ -1025,21 +1440,87 @@ export default function InteractiveCanvas3D({
     return () => el.removeEventListener("pointermove", onMove);
   }, [collabName]);
 
-  // Keyboard untuk catatan terpilih: Delete menghapus, Esc melepas pilihan
+  // Keyboard & Clipboard untuk catatan / gambar di Smartboard:
+  // - Delete / Backspace menghapus catatan atau gambar terpilih
+  // - Esc melepas pilihan
+  // - Ctrl+C / Cmd+C menyalin gambar terpilih atau tangkapan layar Smartboard ke clipboard
+  // - Ctrl+V / Cmd+V menempelkan gambar dari clipboard langsung ke Smartboard
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!selectedFormulaId || inlineComposer) return;
+      if (inlineComposer) return;
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+
       if (e.key === "Delete" || e.key === "Backspace") {
-        e.preventDefault();
-        handleDeleteFormula(selectedFormulaId);
+        if (selectedImageId) {
+          e.preventDefault();
+          handleDeleteBoardImage(selectedImageId);
+          return;
+        }
+        if (selectedFormulaId) {
+          e.preventDefault();
+          handleDeleteFormula(selectedFormulaId);
+          return;
+        }
       }
-      if (e.key === "Escape") setSelectedFormulaId(null);
+
+      if (e.key === "Escape") {
+        setSelectedFormulaId(null);
+        setSelectedImageId(null);
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+        const selection = window.getSelection();
+        if (selection && selection.toString().trim().length > 0) return;
+        if (selectedImageId) {
+          const imgItem = boardImages.find((img) => img.id === selectedImageId);
+          if (imgItem) {
+            e.preventDefault();
+            void copyDataUrlToClipboard(imgItem.dataUrl, "Gambar terpilih disalin ke Clipboard (Ctrl+V)");
+          }
+        } else {
+          e.preventDefault();
+          void copySmartboardSnapshotToClipboard();
+        }
+      }
     };
+
+    const onPaste = (e: ClipboardEvent) => {
+      const activeEl = document.activeElement as HTMLElement | null;
+      // Jika fokus sedang di kolom chat textarea atau input teks biasa, biarkan handler input/chat yang menangani
+      if (activeEl && (activeEl.tagName === "TEXTAREA" || activeEl.tagName === "INPUT" || activeEl.isContentEditable)) {
+        return;
+      }
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of Array.from(items)) {
+        if (item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            addImageFileToBoard(file);
+            return;
+          }
+        }
+      }
+    };
+
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [selectedFormulaId, inlineComposer]);
+    window.addEventListener("paste", onPaste);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("paste", onPaste);
+    };
+  }, [
+    selectedFormulaId,
+    selectedImageId,
+    inlineComposer,
+    boardImages,
+    handleDeleteBoardImage,
+    copyDataUrlToClipboard,
+    copySmartboardSnapshotToClipboard,
+    addImageFileToBoard,
+  ]);
 
   // =========================================================================
   // 2. PARSE FORMULA OR TEXT QUERY -> AUTOMATIC 2D/3D GENERATION
@@ -1451,7 +1932,8 @@ export default function InteractiveCanvas3D({
     window.addEventListener("pointerup", onPointerUp);
   };
 
-  const handleOpenNewFormula = () => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _handleOpenNewFormula = () => {
     setEditingFormulaId(null);
     setLatexDraft("");
     setFormulaColor("default");
@@ -1459,7 +1941,8 @@ export default function InteractiveCanvas3D({
     setIsFormulaModalOpen(true);
   };
 
-  const handleOpenEditFormula = (note: BoardFormulaItem) => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _handleOpenEditFormula = (note: BoardFormulaItem) => {
     setEditingFormulaId(note.id);
     setLatexDraft(note.latex);
     setFormulaColor(note.color || "default");
@@ -1539,16 +2022,42 @@ export default function InteractiveCanvas3D({
   };
 
   const handleTransformTo3D = (expr: string) => {
-    handleSynthesizeFormula(expr);
+    const raw = expr.toLowerCase().trim();
+    const hasSolidWord = /\b(kubus|cube|balok|cuboid|prisma|prism|limas|pyramid|piramid|tabung|cylinder|silinder|kerucut|cone|bola|sphere|pelana|saddle)\b/i.test(raw);
+    if (!hasSolidWord && (raw.includes("x^2") || raw.includes("x²") || raw.includes("parabola") || raw.includes("kuadrat"))) {
+      selectModel("parabola");
+      return;
+    }
+    if (!hasSolidWord && (raw.includes("sin") || raw.includes("cos") || raw.includes("z =") || raw.includes("f(x"))) {
+      selectModel("saddle");
+      return;
+    }
+    const cleaned = expr.replace(/\b(2d|2-d|dua dimensi|jaring-jaring|jaring|net)\b/gi, "").trim() || expr;
+    handleSynthesizeFormula(cleaned);
   };
 
   const handleTransformTo2D = (expr: string) => {
-    handleSynthesizeFormula(expr);
+    const raw = expr.toLowerCase().trim();
+    const isShapeOrSolid = /\b(kubus|cube|balok|cuboid|prisma|prism|limas|pyramid|piramid|tabung|cylinder|kerucut|cone|bola|sphere|jajar\s*genjang|jajargenjang|trapesium|segitiga|persegi|lingkaran|circle|jaring)\b/i.test(raw);
+    if (isShapeOrSolid) {
+      if (/\b(bola|sphere|tabung|cylinder|kerucut|cone)\b/i.test(raw) && !raw.includes("lingkaran")) {
+        handleSynthesizeFormula(`lingkaran ${expr}`);
+        return;
+      }
+      if (/\b(balok|cuboid)\b/i.test(raw)) {
+        handleSynthesizeFormula(`persegi panjang ${expr}`);
+        return;
+      }
+      handleSynthesizeFormula(`${expr} 2d`);
+      return;
+    }
+    handleTransformToGraph(expr);
   };
 
   const commitInlineComposer = () => {
     if (!inlineComposer || !inlineComposer.text.trim()) {
       setInlineComposer(null);
+      setIsTypingToolActive(false);
       return;
     }
     const raw = inlineComposer.text.trim();
@@ -1558,7 +2067,7 @@ export default function InteractiveCanvas3D({
       setFormulaNotes((prev) =>
         prev.map((item) =>
           item.id === inlineComposer.id
-            ? { ...item, latex: formattedLatex, rawText: raw, kind: looksLikeMath(raw) ? "math" : "text" }
+            ? { ...item, latex: formattedLatex, rawText: raw, kind: item.kind || "text" }
             : item
         )
       );
@@ -1569,16 +2078,17 @@ export default function InteractiveCanvas3D({
         id: newId,
         latex: formattedLatex,
         rawText: raw,
-        x: Math.max(2, Math.min(80, inlineComposer.x)),
-        y: Math.max(2, Math.min(80, inlineComposer.y)),
+        x: Math.max(2, Math.min(82, inlineComposer.x)),
+        y: Math.max(2, Math.min(82, inlineComposer.y)),
         color: "default",
         fontSize: "base",
-        kind: looksLikeMath(raw) ? "math" : "text",
+        kind: "text",
       };
       setFormulaNotes((prev) => [...prev, newNote]);
       setSelectedFormulaId(newId);
     }
     setInlineComposer(null);
+    setIsTypingToolActive(false);
   };
 
   // =========================================================================
@@ -1707,14 +2217,16 @@ export default function InteractiveCanvas3D({
       const pvx = originX + vertexX * scale;
       const pvy = originY - vertexY * scale;
 
-      ctx.fillStyle = isDark ? "#fb7185" : "#be123c";
-      ctx.beginPath();
-      ctx.arc(pvx, pvy, 4, 0, Math.PI * 2);
-      ctx.fill();
+      if (showHandles) {
+        ctx.fillStyle = isDark ? "#fb7185" : "#be123c";
+        ctx.beginPath();
+        ctx.arc(pvx, pvy, 4, 0, Math.PI * 2);
+        ctx.fill();
 
-      ctx.fillStyle = isDark ? "#ffffff" : "#0f172a";
-      ctx.font = "bold 11px sans-serif";
-      ctx.fillText(`Puncak (${fmt(vertexX)}, ${fmt(vertexY)})`, pvx + 8, pvy - 8);
+        ctx.fillStyle = isDark ? "#ffffff" : "#0f172a";
+        ctx.font = "bold 11px sans-serif";
+        ctx.fillText(`Puncak (${fmt(vertexX)}, ${fmt(vertexY)})`, pvx + 8, pvy - 8);
+      }
     } else if (activeModel === "2d_trig") {
       ctx.strokeStyle = isDark ? "#c084fc" : "#7e22ce";
       ctx.beginPath();
@@ -3028,6 +3540,7 @@ export default function InteractiveCanvas3D({
         const bracket = new THREE.Mesh(bracketGeo, bracketMat);
         bracket.position.set(cx, cy + displaySize / 2 + GRID_Y, cz);
         bracket.userData = { isCornerHandle: true, index: idx };
+        bracket.visible = showHandlesRef.current;
         group.add(bracket);
         cornerHandlesRef.current.push(bracket);
       });
@@ -3117,6 +3630,7 @@ export default function InteractiveCanvas3D({
         const bracket = new THREE.Mesh(bracketGeo, bracketMat);
         bracket.position.set(cx, cy + hh + GRID_Y, cz);
         bracket.userData = { isCornerHandle: true, index: idx };
+        bracket.visible = showHandlesRef.current;
         group.add(bracket);
         cornerHandlesRef.current.push(bracket);
       });
@@ -3166,6 +3680,7 @@ export default function InteractiveCanvas3D({
       const topHandle = new THREE.Mesh(handleGeo, handleMat);
       topHandle.position.set(r, h + GRID_Y, 0);
       topHandle.userData = { isCornerHandle: true, index: 0 };
+      topHandle.visible = showHandlesRef.current;
       group.add(topHandle);
       cornerHandlesRef.current.push(topHandle);
 
@@ -3271,6 +3786,7 @@ export default function InteractiveCanvas3D({
         const dot = new THREE.Mesh(sphereHandleGeo, sphereHandleMat);
         dot.position.set(radius, radius + GRID_Y, 0);
         dot.userData = { isCornerHandle: true, index: 0 };
+        dot.visible = showHandlesRef.current;
         group.add(dot);
         cornerHandlesRef.current.push(dot);
 
@@ -3362,14 +3878,17 @@ export default function InteractiveCanvas3D({
           const bMesh = new THREE.Mesh(bGeo, bMat);
           bMesh.position.set(vx, GRID_Y, vz);
           bMesh.userData = { isCornerHandle: true, index: i };
+          bMesh.visible = showHandlesRef.current;
           group.add(bMesh);
           cornerHandlesRef.current.push(bMesh);
 
           // Top bracket
           const tGeo = createCornerBracketGeometry(dx, -1, dz, 0.22, 0.035);
-          const tMesh = new THREE.Mesh(tGeo, bMat);
+          const tMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x38bdf8, emissiveIntensity: 0.5 });
+          const tMesh = new THREE.Mesh(tGeo, tMat);
           tMesh.position.set(vx, prismH + GRID_Y, vz);
           tMesh.userData = { isCornerHandle: true, index: i + prismSides };
+          tMesh.visible = showHandlesRef.current;
           group.add(tMesh);
           cornerHandlesRef.current.push(tMesh);
         }
@@ -3431,6 +3950,7 @@ export default function InteractiveCanvas3D({
         const apex = new THREE.Mesh(apexGeo, apexMat);
         apex.position.set(0, pyrH + GRID_Y + 0.1, 0);
         apex.userData = { isCornerHandle: true, index: 0 };
+        apex.visible = showHandlesRef.current;
         group.add(apex);
         cornerHandlesRef.current.push(apex);
 
@@ -3445,6 +3965,7 @@ export default function InteractiveCanvas3D({
           const bMesh = new THREE.Mesh(bGeo, bMat);
           bMesh.position.set(bx, GRID_Y, bz);
           bMesh.userData = { isCornerHandle: true, index: i + 1 };
+          bMesh.visible = showHandlesRef.current;
           group.add(bMesh);
           cornerHandlesRef.current.push(bMesh);
         }
@@ -3524,6 +4045,7 @@ export default function InteractiveCanvas3D({
         const apex = new THREE.Mesh(apexGeo, apexMat);
         apex.position.set(0, pyrH + GRID_Y + 0.1, 0);
         apex.userData = { isCornerHandle: true, index: 0 };
+        apex.visible = showHandlesRef.current;
         group.add(apex);
         cornerHandlesRef.current.push(apex);
 
@@ -3538,6 +4060,7 @@ export default function InteractiveCanvas3D({
           const bMesh = new THREE.Mesh(bGeo, bMat);
           bMesh.position.set(bx, GRID_Y, bz);
           bMesh.userData = { isCornerHandle: true, index: i + 1 };
+          bMesh.visible = showHandlesRef.current;
           group.add(bMesh);
           cornerHandlesRef.current.push(bMesh);
         }
@@ -3587,12 +4110,13 @@ export default function InteractiveCanvas3D({
         );
         proxy.position.copy(bracket.position);
         proxy.userData = { isCornerHandle: true, bracketRef: bracket };
+        proxy.visible = showHandlesRef.current;
         parent.add(proxy);
         proxies.push(proxy);
       });
       cornerHandlesRef.current = [...cornerHandlesRef.current, ...proxies];
     }
-  }, [activeModel, solidKind, showSlicePlane, sliceProgress, wireframe, is3DModel, paramA, paramB, paramC, isDark, unit]);
+  }, [activeModel, solidKind, showSlicePlane, sliceProgress, wireframe, is3DModel, paramA, paramB, paramC, isDark, unit, showHandles]);
 
   // Init Three.js container
   useEffect(() => {
@@ -3610,6 +4134,11 @@ export default function InteractiveCanvas3D({
 
     const camera = new THREE.PerspectiveCamera(45, initialWidth / initialHeight, 0.1, 1000);
     camera.position.set(6.5, 5.5, 8.5);
+    // Pratinjau landing: dekatkan kamera agar kubus tampil lebih besar.
+    const previewZoom = preview?.cameraZoom ?? 1;
+    if (previewZoom > 0 && previewZoom !== 1) {
+      camera.position.multiplyScalar(1 / previewZoom);
+    }
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -3622,6 +4151,8 @@ export default function InteractiveCanvas3D({
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.autoRotate = autoRotate;
+    // Pratinjau landing: roda mouse tidak dipakai zoom, supaya halaman tetap bisa digulir.
+    controls.enableZoom = !preview?.disableWheel;
     controlsRef.current = controls;
 
     // Studio Lighting
@@ -3650,13 +4181,33 @@ export default function InteractiveCanvas3D({
     // Synchronously populate the newly mounted meshGroup
     rebuildMeshes();
 
+    // Render loop yang benar-benar bisa dijeda: stop() membatalkan frame yang
+    // masih tertunda (bukan hanya melewati isi frame), start() menjadwalkan
+    // ulang dan langsung menggambar satu frame agar kanvas tidak pernah kosong
+    // saat dilanjutkan.
+    let loopRunning = false;
     const animate = () => {
+      if (!loopRunning) return;
       animFrameIdRef.current = requestAnimationFrame(animate);
+      if (scrollRenderPausedRef.current) return;
       controls.update();
       if (selectionBoxRef.current && selectedSolidRef.current) selectionBoxRef.current.update();
       renderer.render(scene, camera);
     };
-    animate();
+    const startRenderLoop = () => {
+      if (loopRunning) return;
+      loopRunning = true;
+      animate();
+    };
+    const stopRenderLoop = () => {
+      loopRunning = false;
+      if (animFrameIdRef.current !== null) {
+        cancelAnimationFrame(animFrameIdRef.current);
+        animFrameIdRef.current = null;
+      }
+    };
+    renderLoopControlRef.current = { start: startRenderLoop, stop: stopRenderLoop };
+    startRenderLoop();
 
     // =========================================================================
     // Direct Mouse Corner Drag to Scale
@@ -3675,7 +4226,7 @@ export default function InteractiveCanvas3D({
         return;
       }
 
-      if (!container || !camera || isDrawingToolActiveRef.current) return;
+      if (!container || !camera || isDrawingToolActiveRef.current || !showHandlesRef.current) return;
       const rect = container.getBoundingClientRect();
       mouseVecRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       mouseVecRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -3710,7 +4261,7 @@ export default function InteractiveCanvas3D({
     };
 
     const onPointerDown = (e: PointerEvent) => {
-      if (!container || !camera || isDrawingToolActiveRef.current) return;
+      if (!container || !camera || isDrawingToolActiveRef.current || !showHandlesRef.current) return;
       const rect = container.getBoundingClientRect();
       mouseVecRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       mouseVecRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -3799,9 +4350,25 @@ export default function InteractiveCanvas3D({
       }
     };
 
+    const onPointerLeaveContainer = () => {
+      if (hoveredCornerRef.current) {
+        hoveredCornerRef.current.scale.set(1, 1, 1);
+        const m = hoveredCornerRef.current.material as THREE.MeshStandardMaterial;
+        if (m && m.emissive) {
+          m.emissive.setHex(0x38bdf8);
+          m.emissiveIntensity = 0.4;
+        }
+        hoveredCornerRef.current = null;
+      }
+      if (container) {
+        container.style.cursor = isDrawingToolActiveRef.current ? "crosshair" : "default";
+      }
+    };
+
     container.addEventListener("pointermove", onPointerMove);
     container.addEventListener("pointerdown", onPointerDown);
     container.addEventListener("pointerdown", onSelectDown);
+    container.addEventListener("pointerleave", onPointerLeaveContainer);
     window.addEventListener("pointerup", onSelectUp);
     window.addEventListener("pointerup", onPointerUp);
     window.addEventListener("pointercancel", onPointerUp);
@@ -3832,10 +4399,13 @@ export default function InteractiveCanvas3D({
       clearTimeout(t1);
       clearTimeout(t2);
       observer.disconnect();
+      stopRenderLoop();
+      renderLoopControlRef.current = null;
       if (animFrameIdRef.current) cancelAnimationFrame(animFrameIdRef.current);
       container.removeEventListener("pointermove", onPointerMove);
       container.removeEventListener("pointerdown", onPointerDown);
       container.removeEventListener("pointerdown", onSelectDown);
+      container.removeEventListener("pointerleave", onPointerLeaveContainer);
       window.removeEventListener("pointerup", onSelectUp);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
@@ -3851,6 +4421,67 @@ export default function InteractiveCanvas3D({
       controlsRef.current = null;
     };
   }, []);
+
+  // Pantau visibilitas halaman: tab browser yang disembunyikan menghentikan
+  // render loop sampai tab terlihat kembali.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const syncVisibility = () => {
+      setIsPageHidden(document.visibilityState === "hidden" || document.hidden);
+    };
+    syncVisibility();
+    document.addEventListener("visibilitychange", syncVisibility);
+    return () => document.removeEventListener("visibilitychange", syncVisibility);
+  }, []);
+
+  // Pantau apakah viewport kanvas masih terlihat. Kanvas yang di-scroll keluar
+  // layar (mis. layout bertumpuk di layar kecil) tidak perlu merender frame.
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const node = container3DRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => setIsCanvasInView(entry.isIntersecting));
+      },
+      { rootMargin: "0px", threshold: 0 }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  // Satu tempat yang memutuskan kapan render loop 3D boleh berjalan. Frame
+  // yang sedang tertunda dibatalkan (cancelAnimationFrame) saat dijeda dan
+  // dijadwalkan ulang saat dilanjutkan — perilaku kanvas tidak berubah.
+  useEffect(() => {
+    const loop = renderLoopControlRef.current;
+    if (!loop) return;
+    if (paused || !is3DModel || !isCanvasInView || isPageHidden) {
+      loop.stop();
+    } else {
+      loop.start();
+    }
+  }, [paused, is3DModel, isCanvasInView, isPageHidden]);
+
+  // Lewati penggambaran WebGL selama gulir (khusus pratinjau landing). Tanpa
+  // setState: hanya menyalakan flag ref yang dibaca render loop.
+  useEffect(() => {
+    if (!pauseOnScroll) return;
+    let timer: number | undefined;
+    const onScroll = () => {
+      scrollRenderPausedRef.current = true;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        scrollRenderPausedRef.current = false;
+      }, 180);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.clearTimeout(timer);
+      scrollRenderPausedRef.current = false;
+    };
+  }, [pauseOnScroll]);
 
   // Update autoRotate without re-mounting Three.js
   useEffect(() => {
@@ -3909,17 +4540,46 @@ export default function InteractiveCanvas3D({
     const rect = boardEl.getBoundingClientRect();
     const pctX = ((e.clientX - rect.left) / rect.width) * 100;
     const pctY = ((e.clientY - rect.top) / rect.height) * 100;
+    lastBoardPointerPctRef.current = { x: pctX, y: pctY };
 
-    // If Typing tool is active, clicking canvas opens inline composer!
-    if (isTypingToolActive) {
-      setInlineComposer({ x: Math.max(2, Math.min(75, pctX)), y: Math.max(2, Math.min(75, pctY)), text: "" });
-      setSelectedFormulaId(null);
+    // If an inline composer is already open and the user clicks outside it on the canvas:
+    if (inlineComposer) {
+      e.preventDefault();
+      if (inlineComposer.text.trim()) {
+        commitInlineComposer();
+        return;
+      }
+      if (isTypingToolActive) {
+        setInlineComposer({
+          x: Math.max(4, Math.min(78, pctX)),
+          y: Math.max(6, Math.min(78, pctY)),
+          text: "",
+        });
+        setSelectedFormulaId(null);
+        setSelectedImageId(null);
+        return;
+      }
+      setInlineComposer(null);
       return;
     }
 
-    // If clicked outside any formula note, deselect and start marquee drag
-    if (!target.closest("[data-formula-card]")) {
+    // If Typing tool is active, clicking canvas opens inline composer directly at clicked spot!
+    if (isTypingToolActive) {
+      e.preventDefault();
+      setInlineComposer({
+        x: Math.max(4, Math.min(78, pctX)),
+        y: Math.max(6, Math.min(78, pctY)),
+        text: "",
+      });
       setSelectedFormulaId(null);
+      setSelectedImageId(null);
+      return;
+    }
+
+    // If clicked outside any formula note or pasted image, deselect and start marquee drag
+    if (!target.closest("[data-formula-card]") && !target.closest("[data-board-image]")) {
+      setSelectedFormulaId(null);
+      setSelectedImageId(null);
       setSelectionMarquee({
         startX: pctX,
         startY: pctY,
@@ -3930,9 +4590,15 @@ export default function InteractiveCanvas3D({
   };
 
   const handleBoardPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!selectionMarquee) return;
     const boardEl = boardWorkspaceRef.current;
-    if (!boardEl) return;
+    if (boardEl) {
+      const rect = boardEl.getBoundingClientRect();
+      lastBoardPointerPctRef.current = {
+        x: ((e.clientX - rect.left) / rect.width) * 100,
+        y: ((e.clientY - rect.top) / rect.height) * 100,
+      };
+    }
+    if (!selectionMarquee || !boardEl) return;
     const rect = boardEl.getBoundingClientRect();
     const pctX = ((e.clientX - rect.left) / rect.width) * 100;
     const pctY = ((e.clientY - rect.top) / rect.height) * 100;
@@ -3953,10 +4619,45 @@ export default function InteractiveCanvas3D({
         });
         if (hit) {
           setSelectedFormulaId(hit.id);
+          setSelectedImageId(null);
+        } else {
+          const hitImg = boardImages.find((img) => {
+            return img.x >= minX - 20 && img.x <= maxX && img.y >= minY - 15 && img.y <= maxY;
+          });
+          if (hitImg) {
+            setSelectedImageId(hitImg.id);
+            setSelectedFormulaId(null);
+          }
         }
       }
       setSelectionMarquee(null);
     }
+  };
+
+  const handleBoardDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (e.dataTransfer?.types?.includes("Files")) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    }
+  };
+
+  const handleBoardDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    if (imageFiles.length === 0) return;
+    e.preventDefault();
+    const boardEl = boardWorkspaceRef.current;
+    let pctX = 25;
+    let pctY = 20;
+    if (boardEl) {
+      const rect = boardEl.getBoundingClientRect();
+      pctX = ((e.clientX - rect.left) / rect.width) * 100;
+      pctY = ((e.clientY - rect.top) / rect.height) * 100;
+    }
+    imageFiles.forEach((file, idx) => {
+      addImageFileToBoard(file, pctX + idx * 4, pctY + idx * 4);
+    });
   };
 
   const handleBoardDoubleClick = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -4002,11 +4703,12 @@ export default function InteractiveCanvas3D({
   };
 
   // Status apakah teks sambutan & preset papan kosong boleh ditampilkan:
-  // Hilang secara otomatis jika pengguna mulai mencoret kanvas, mengetik rumus, atau mengaktifkan alat pena/ketik
+  // Hilang secara otomatis jika pengguna mulai mencoret kanvas, mengetik rumus, menempelkan gambar, atau mengaktifkan alat pena/ketik
   const showEmptyBoardPlaceholder =
     activeModel === "empty" &&
     !hasDrawings &&
     formulaNotes.length === 0 &&
+    boardImages.length === 0 &&
     !inlineComposer &&
     !isTypingToolActive &&
     !(isDrawingToolActive && drawingMode === "pen");
@@ -4016,6 +4718,23 @@ export default function InteractiveCanvas3D({
   // =========================================================================
   return (
     <div className={`relative w-full h-full flex flex-col dark:bg-[#080a0f] bg-slate-50 dark:text-zinc-100 text-slate-800 select-none overflow-hidden font-sans ${className}`}>
+      {/* Hidden File Input for Image Upload onto Smartboard */}
+      <input
+        ref={boardImageInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const files = e.target.files;
+          if (!files || files.length === 0) return;
+          Array.from(files).forEach((file, idx) => {
+            addImageFileToBoard(file, 24 + idx * 4, 20 + idx * 4);
+          });
+          e.target.value = "";
+        }}
+      />
+
       {/* 1. TOP HEADER RAMPING: pemilih mode saja - semua ALAT pindah ke dock bawah (gaya Figma) */}
       <div className="h-12 px-2.5 sm:px-4 border-b dark:border-white/[0.08] border-slate-200 dark:bg-[#0d0f17] bg-white flex items-center justify-between gap-1.5 sm:gap-2 shrink-0 z-[35]">
         {/* Left: Mode Picker Segmented Buttons */}
@@ -4023,38 +4742,38 @@ export default function InteractiveCanvas3D({
           <div className="flex items-center dark:bg-white/[0.04] bg-slate-100 p-0.5 rounded-xl border dark:border-white/[0.08] border-slate-200">
             <button
               type="button"
-              onClick={() => selectModel("3d_empty")}
+              onClick={() => (preview?.onSceneChange ? preview.onSceneChange("3d") : selectModel(last3DModelRef.current))}
               className={`px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1 transition cursor-pointer ${
                 is3DModel
                   ? "bg-white dark:bg-white/[0.16] text-slate-900 dark:text-white shadow-sm font-semibold"
                   : "dark:text-zinc-400 text-slate-600 dark:hover:text-white hover:text-slate-900"
               }`}
-              title="Geometri 3D Ruang (Default Bersih & Kosong)"
+              title="Geometri 3D Ruang"
             >
               <Box className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">3D</span>
             </button>
             <button
               type="button"
-              onClick={() => selectModel("2d_empty")}
+              onClick={() => (preview?.onSceneChange ? preview.onSceneChange("2d") : selectModel(last2DModelRef.current))}
               className={`px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1 transition cursor-pointer ${
                 is2DGraphModel
                   ? "bg-white dark:bg-white/[0.16] text-slate-900 dark:text-white shadow-sm font-semibold"
                   : "dark:text-zinc-400 text-slate-600 dark:hover:text-white hover:text-slate-900"
               }`}
-              title="Grafik 2D Kartesius (Default Bersih & Kosong)"
+              title="Grafik 2D Kartesius"
             >
               <span className="font-mono text-xs">2D</span>
             </button>
             <button
               type="button"
-              onClick={() => selectModel("empty")}
+              onClick={() => (preview?.onSceneChange ? preview.onSceneChange("papan") : selectModel("empty"))}
               className={`px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1 transition cursor-pointer ${
                 activeModel === "empty"
                   ? "bg-white dark:bg-white/[0.16] text-slate-900 dark:text-white shadow-sm font-semibold"
                   : "dark:text-zinc-400 text-slate-600 dark:hover:text-white hover:text-slate-900"
               }`}
-              title="Papan Tulis Kosong"
+              title="Papan Tulis"
             >
               <span className="text-xs">Papan</span>
             </button>
@@ -4084,7 +4803,7 @@ export default function InteractiveCanvas3D({
             </button>
 
             {showSharePanel && (
-              <div className="absolute right-0 top-[calc(100%+8px)] w-72 max-w-[calc(100vw-2rem)] p-3.5 rounded-2xl liquid-glass-popup border border-slate-200 dark:border-white/10 shadow-2xl z-50 text-left animate-liquid-pop origin-top-right text-slate-800 dark:text-zinc-200">
+              <div className="max-sm:fixed max-sm:left-3 max-sm:right-3 max-sm:top-14 max-sm:w-auto sm:absolute sm:right-0 sm:top-[calc(100%+8px)] sm:w-72 p-3.5 rounded-2xl liquid-glass-popup border border-slate-200 dark:border-white/10 shadow-2xl z-50 text-left animate-liquid-pop origin-top-right text-slate-800 dark:text-zinc-200">
                 {!collabRoom ? (
                   <>
                     <div className="text-xs font-semibold text-slate-900 dark:text-white">Gambar Bareng di Papan Ini</div>
@@ -4175,6 +4894,15 @@ export default function InteractiveCanvas3D({
             )}
           </div>
 
+          <button
+            type="button"
+            onClick={() => void copySmartboardSnapshotToClipboard()}
+            className="h-9 w-9 flex items-center justify-center rounded-xl dark:bg-white/[0.04] bg-slate-100 hover:bg-slate-200 dark:hover:bg-white/[0.08] text-slate-500 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white border dark:border-white/[0.06] border-slate-200 transition cursor-pointer"
+            title="Salin Gambar Papan Tulis ke Clipboard (Ctrl+C)"
+          >
+            <Copy className="w-4 h-4" />
+          </button>
+
           {onToggleProjector && (
             <button
               type="button"
@@ -4210,10 +4938,26 @@ export default function InteractiveCanvas3D({
         onPointerMove={handleBoardPointerMove}
         onPointerUp={handleBoardPointerUp}
         onDoubleClick={handleBoardDoubleClick}
+        onDragOver={handleBoardDragOver}
+        onDrop={handleBoardDrop}
         className={`flex-1 relative w-full h-full min-h-0 bg-slate-50 dark:bg-[#080a0f] overflow-hidden ${
           isTypingToolActive ? "cursor-text" : ""
         }`}
       >
+        {/* Toast Notifikasi Copy / Paste Gambar */}
+        {clipboardToast && (
+          <div className="
+            absolute top-3 left-1/2 -translate-x-1/2 z-50
+            px-3.5 py-1.5 rounded-full
+            bg-[#09090b]/95 dark:bg-white/95
+            text-white dark:text-[#09090b]
+            text-xs font-semibold shadow-lg
+            flex items-center gap-1.5 pointer-events-none animate-fadeIn
+          ">
+            <Check className="w-3.5 h-3.5 text-emerald-400 dark:text-emerald-600" />
+            <span>{clipboardToast}</span>
+          </div>
+        )}
         {/* A. EMPTY STATE (Otomatis hilang jika pengguna mencoret kanvas, mengetik rumus, atau mengaktifkan pena/ketik) */}
         {showEmptyBoardPlaceholder && (
           <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-0 select-none animate-fadeIn pointer-events-auto">
@@ -4288,12 +5032,18 @@ export default function InteractiveCanvas3D({
         >
           <canvas
             ref={graph2DCanvasRef}
-            onWheel={handleWheel2D}
+            onWheel={preview?.disableWheel ? undefined : handleWheel2D}
             onPointerDown={handle2DPointerDown}
             onPointerMove={handle2DPointerMove}
             onPointerUp={handle2DPointerUp}
             onPointerLeave={handle2DPointerUp}
-            className={`w-full h-full block ${isDrawingToolActive ? "" : "cursor-grab active:cursor-grabbing"}`}
+            className={`w-full h-full block ${
+              isDrawingToolActive
+                ? ""
+                : isTypingToolActive
+                ? "cursor-text"
+                : "cursor-grab active:cursor-grabbing"
+            }`}
           />
 
           {/* 2D Zoom In / Out / Reset Floating Controls */}
@@ -4329,8 +5079,8 @@ export default function InteractiveCanvas3D({
 
           {/* Menu Kurva Cepat Saat Mode 2D Kosong */}
           {activeModel === "2d_empty" && (
-            <div className="absolute top-3 right-3 z-20 flex items-center gap-1.5 p-1 rounded-xl liquid-glass-popup border border-slate-200 dark:border-white/10 shadow-lg select-none text-xs">
-              <span className="text-[11px] text-slate-500 dark:text-zinc-400 px-2 font-medium">
+            <div className="absolute top-3 right-3 max-sm:top-2 max-sm:right-2 z-20 flex items-center gap-1.5 p-1 rounded-xl liquid-glass-popup border border-slate-200 dark:border-white/10 shadow-lg select-none text-xs">
+              <span className="text-[11px] text-slate-500 dark:text-zinc-400 px-2 font-medium hidden sm:inline">
                 Pilih Kurva 2D:
               </span>
               <button
@@ -4357,11 +5107,11 @@ export default function InteractiveCanvas3D({
             </div>
           )}
 
-          {/* 2D Equation & Coefficients Bar (Repositioned to bottom-left with safe right clearance) */}
+          {/* 2D Equation & Coefficients Bar (Positioned at top-right so bottom Dock is 100% clear) */}
           {(activeModel === "2d_quadratic" || activeModel === "2d_trig" || activeModel === "2d_linear" || activeModel === "2d_circle") && (
-            <div className="absolute bottom-4 left-4 max-w-[calc(100%-80px)] sm:max-w-md md:max-w-lg flex flex-col sm:flex-row items-center justify-between gap-3 p-3 rounded-2xl bg-white/95 dark:bg-[#0f121d]/90 border border-slate-200 dark:border-white/[0.08] backdrop-blur-md shadow-xl z-20 text-xs text-slate-800 dark:text-zinc-200 animate-fadeIn">
-              <div className="flex items-center gap-3">
-                <span className="font-semibold text-slate-900 dark:text-white font-mono text-[13px]">
+            <div className="absolute top-3 right-3 max-sm:top-14 max-sm:left-3 max-sm:right-3 flex flex-wrap items-center justify-between gap-2.5 px-3 py-2 rounded-xl bg-white/95 dark:bg-[#0f121d]/95 border border-slate-200/90 dark:border-white/[0.08] backdrop-blur-md shadow-md z-20 text-xs text-slate-800 dark:text-zinc-200 animate-fadeIn select-none">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-slate-900 dark:text-white font-mono text-xs">
                   {activeModel === "2d_quadratic"
                     ? `y = ${paramA}x² ${paramB >= 0 ? `+ ${paramB}x` : `- ${Math.abs(paramB)}x`} ${paramC >= 0 ? `+ ${paramC}` : `- ${Math.abs(paramC)}`}`
                     : activeModel === "2d_trig"
@@ -4371,9 +5121,9 @@ export default function InteractiveCanvas3D({
               </div>
 
               {/* Sliders for Coefficients */}
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-600 dark:text-zinc-400 font-mono font-medium">A: {paramA}</span>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-600 dark:text-zinc-400 font-mono font-medium text-[11px]">A: {paramA}</span>
                   <input
                     type="range"
                     min="-4"
@@ -4381,12 +5131,12 @@ export default function InteractiveCanvas3D({
                     step="0.5"
                     value={paramA}
                     onChange={(e) => setParamA(parseFloat(e.target.value))}
-                    className="w-20 accent-slate-900 dark:accent-white cursor-pointer"
+                    className="w-16 accent-slate-900 dark:accent-white cursor-pointer"
                   />
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-600 dark:text-zinc-400 font-mono font-medium">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-600 dark:text-zinc-400 font-mono font-medium text-[11px]">
                     {activeModel === "2d_quadratic" ? `C: ${paramC}` : `B: ${paramB}`}
                   </span>
                   <input
@@ -4400,7 +5150,7 @@ export default function InteractiveCanvas3D({
                       if (activeModel === "2d_quadratic") setParamC(val);
                       else setParamB(val);
                     }}
-                    className="w-20 accent-slate-900 dark:accent-white cursor-pointer"
+                    className="w-16 accent-slate-900 dark:accent-white cursor-pointer"
                   />
                 </div>
               </div>
@@ -4412,7 +5162,11 @@ export default function InteractiveCanvas3D({
         <div
           ref={container3DRef}
           className={`absolute inset-0 transition-opacity duration-200 ${
-            is3DModel ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+            is3DModel
+              ? isTypingToolActive || isDrawingToolActive
+                ? "opacity-100 pointer-events-none"
+                : "opacity-100 pointer-events-auto"
+              : "opacity-0 pointer-events-none"
           }`}
         />
 
@@ -4915,11 +5669,123 @@ export default function InteractiveCanvas3D({
           </div>
         )}
 
-        {/* E. KATEX FORMULA CARDS OVERLAY (Draggable, Selectable, Auto-Latex Typography) */}
+        {/* E0. FIGMA-STYLE PASTED / DROPPED IMAGE LAYERS (Draggable, Resizable, Copyable to Clipboard) */}
+        {boardImages.map((img) => {
+          const isSelected = selectedImageId === img.id;
+          return (
+            <div
+              key={img.id}
+              data-board-image="true"
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedImageId(img.id);
+                setSelectedFormulaId(null);
+              }}
+              onPointerDown={(e) => {
+                if ((e.target as HTMLElement).closest("[data-image-toolbar]") || (e.target as HTMLElement).closest("[data-resize-handle]")) {
+                  return;
+                }
+                setSelectedImageId(img.id);
+                setSelectedFormulaId(null);
+                handleImagePointerDown(img.id, e);
+              }}
+              style={{ left: `${img.x}%`, top: `${img.y}%`, width: `${img.width}px` }}
+              className={`absolute z-20 group rounded-lg select-none cursor-grab active:cursor-grabbing transition-shadow duration-150 ${
+                isSelected
+                  ? "ring-2 ring-[#0d99ff] shadow-xl"
+                  : "hover:ring-1 hover:ring-[#0d99ff]/60 shadow-md border border-slate-200/70 dark:border-white/10"
+              } bg-white/90 dark:bg-[#121520]/90 p-1`}
+            >
+              {/* Floating Image Action Bar (When Selected - Figma Style) */}
+              {isSelected && (
+                <>
+                  <div
+                    data-image-toolbar="true"
+                    onClick={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className={`absolute left-0 flex items-center gap-1 p-1 rounded-xl bg-white/98 dark:bg-[#12141c]/98 backdrop-blur-xl border border-slate-200/90 dark:border-white/15 shadow-[0_10px_30px_-6px_rgba(15,23,42,0.18)] dark:shadow-[0_14px_34px_-6px_rgba(0,0,0,0.65)] z-30 animate-fadeIn whitespace-nowrap text-xs text-slate-800 dark:text-zinc-200 cursor-default ${
+                      img.y < 16 ? "top-[calc(100%+10px)]" : "-top-11"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => void copyDataUrlToClipboard(img.dataUrl, "Gambar disalin ke Clipboard (Ctrl+V)")}
+                      className="px-2.5 py-1 rounded-lg bg-[#09090b] hover:bg-zinc-800 dark:bg-white dark:hover:bg-zinc-200 text-white dark:text-[#09090b] text-[11px] font-semibold flex items-center gap-1.5 shadow-2xs transition cursor-pointer"
+                      title="Salin gambar ini ke Clipboard (Ctrl+C)"
+                    >
+                      <Copy className="w-3 h-3" />
+                      <span>Salin Gambar</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setBoardImages((prev) =>
+                          prev.map((item) =>
+                            item.id === img.id ? { ...item, width: Math.max(80, item.width - 40) } : item
+                          )
+                        )
+                      }
+                      className="p-1 rounded-lg text-slate-600 hover:text-slate-900 dark:text-zinc-300 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.08] transition cursor-pointer"
+                      title="Perkecil Gambar"
+                    >
+                      <ZoomOut className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setBoardImages((prev) =>
+                          prev.map((item) =>
+                            item.id === img.id ? { ...item, width: Math.min(680, item.width + 40) } : item
+                          )
+                        )
+                      }
+                      className="p-1 rounded-lg text-slate-600 hover:text-slate-900 dark:text-zinc-300 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.08] transition cursor-pointer"
+                      title="Perbesar Gambar"
+                    >
+                      <ZoomIn className="w-3.5 h-3.5" />
+                    </button>
+
+                    <div className="w-[1px] h-4 bg-slate-200 dark:bg-white/10 mx-0.5" />
+
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteBoardImage(img.id)}
+                      className="p-1 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-500/10 transition cursor-pointer"
+                      title="Hapus Gambar (Del)"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* 4 Figma-style Corner Handles (Bottom-Right is draggable for resizing) */}
+                  <span className="absolute -top-[5px] -left-[5px] w-2.5 h-2.5 bg-white border-2 border-[#0d99ff] shadow-2xs pointer-events-none" />
+                  <span className="absolute -top-[5px] -right-[5px] w-2.5 h-2.5 bg-white border-2 border-[#0d99ff] shadow-2xs pointer-events-none" />
+                  <span className="absolute -bottom-[5px] -left-[5px] w-2.5 h-2.5 bg-white border-2 border-[#0d99ff] shadow-2xs pointer-events-none" />
+                  <span
+                    data-resize-handle="true"
+                    onPointerDown={(e) => handleImageResizePointerDown(img.id, e)}
+                    title="Tarik untuk mengubah ukuran gambar"
+                    className="absolute -bottom-[6px] -right-[6px] w-3.5 h-3.5 bg-white border-2 border-[#0d99ff] shadow-xs cursor-nwse-resize pointer-events-auto"
+                  />
+                </>
+              )}
+
+              <img
+                src={img.dataUrl}
+                alt={img.name || "Gambar Papan"}
+                draggable={false}
+                className="w-full h-auto rounded-md block select-none pointer-events-none"
+              />
+            </div>
+          );
+        })}
+
+        {/* E. FIGMA-STYLE CANVAS TEXT & LATEX LAYERS (Draggable, Selectable, Transformable to LaTeX / 2D / 3D) */}
         {formulaNotes.map((note) => {
           const isSelected = selectedFormulaId === note.id;
-          const detected = detectMathTransform(note.rawText || note.latex);
-          const noteIsMath = note.kind ? note.kind === "math" : looksLikeMath(note.rawText || note.latex);
+          const noteIsMath = note.kind === "math";
 
           return (
             <div
@@ -4929,93 +5795,40 @@ export default function InteractiveCanvas3D({
                 e.stopPropagation();
                 setSelectedFormulaId(note.id);
               }}
+              onPointerDown={(e) => {
+                if ((e.target as HTMLElement).closest("[data-transform-toolbar]")) return;
+                setSelectedFormulaId(note.id);
+                handleFormulaPointerDown(note.id, e);
+              }}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setInlineComposer({
+                  x: note.x,
+                  y: note.y,
+                  text: note.rawText || note.latex,
+                  id: note.id,
+                });
+              }}
               style={{ left: `${note.x}%`, top: `${note.y}%` }}
-              className={`absolute z-20 group rounded-2xl p-3.5 shadow-xl backdrop-blur-md select-none border transition-all duration-150 ${
+              className={`absolute z-20 group rounded-lg px-3 py-2 select-none cursor-grab active:cursor-grabbing transition-shadow duration-150 ${
                 isSelected
-                  ? "ring-2 ring-amber-500 shadow-2xl scale-[1.02]"
-                  : "hover:border-slate-400 dark:hover:border-white/30"
-              } ${
-                note.color === "amber"
-                  ? "bg-amber-500/10 dark:bg-amber-950/40 border-amber-300/80 dark:border-amber-500/30 text-amber-950 dark:text-amber-100"
-                  : note.color === "emerald"
-                  ? "bg-emerald-500/10 dark:bg-emerald-950/40 border-emerald-300/80 dark:border-emerald-500/30 text-emerald-950 dark:text-emerald-100"
-                  : note.color === "blue"
-                  ? "bg-blue-500/10 dark:bg-blue-950/40 border-blue-300/80 dark:border-blue-500/30 text-blue-950 dark:text-blue-100"
-                  : note.color === "rose"
-                  ? "bg-rose-500/10 dark:bg-rose-950/40 border-rose-300/80 dark:border-rose-500/30 text-rose-950 dark:text-rose-100"
-                  : note.color === "purple"
-                  ? "bg-purple-500/10 dark:bg-purple-950/40 border-purple-300/80 dark:border-purple-500/30 text-purple-950 dark:text-purple-100"
-                  : "bg-white/95 dark:bg-[#121520]/95 border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
-              }`}
+                  ? "ring-2 ring-[#0d99ff] bg-white/95 dark:bg-[#121520]/95 shadow-lg"
+                  : "bg-white/80 dark:bg-[#121520]/80 hover:ring-1 hover:ring-[#0d99ff]/60 border border-slate-200/70 dark:border-white/10 shadow-xs"
+              } backdrop-blur-xs text-slate-900 dark:text-white`}
             >
-              {/* Contextual Floating Transformation Bar (When Selected - Like Video) */}
+              {/* Contextual Floating Transformation Bar (When Selected - Figma Style) */}
               {isSelected && (
                 <>
                   <div
+                    data-transform-toolbar="true"
                     onClick={(e) => e.stopPropagation()}
-                    className={`absolute left-0 flex items-center gap-1 p-1 rounded-xl liquid-glass-popup border border-slate-200/90 dark:border-white/15 shadow-2xl z-30 animate-fadeIn whitespace-nowrap text-xs text-slate-800 dark:text-zinc-200 ${note.y < 18 ? "top-[calc(100%+10px)]" : "-top-11"}`}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className={`absolute left-0 flex items-center gap-1 p-1 rounded-xl bg-white/98 dark:bg-[#12141c]/98 backdrop-blur-xl border border-slate-200/90 dark:border-white/15 shadow-[0_10px_30px_-6px_rgba(15,23,42,0.18)] dark:shadow-[0_14px_34px_-6px_rgba(0,0,0,0.65)] z-30 animate-fadeIn whitespace-nowrap text-xs text-slate-800 dark:text-zinc-200 cursor-default ${
+                      note.y < 16 ? "top-[calc(100%+10px)]" : "-top-11"
+                    }`}
                   >
-                    {/* Transform to 2D Graph */}
-                    {(detected === "graph" || note.latex.includes("x") || note.latex.includes("sin")) && (
-                      <button
-                        type="button"
-                        onClick={() => handleTransformToGraph(note.rawText || note.latex)}
-                        className="px-2.5 py-1 rounded-lg bg-blue-500 hover:bg-blue-600 text-white text-[11px] font-semibold flex items-center gap-1.5 shadow-xs transition cursor-pointer"
-                        title="Ubah formula ini menjadi Grafik Kartesius 2D"
-                      >
-                        <Sparkles className="w-3 h-3" />
-                        <span>Ubah ke Grafik 2D</span>
-                      </button>
-                    )}
-
-                    {/* Transform to 3D Solid */}
-                    {(detected === "3d" || /kubus|prisma|limas|balok|bola|tabung/i.test(note.rawText || note.latex)) && (
-                      <button
-                        type="button"
-                        onClick={() => handleTransformTo3D(note.rawText || note.latex)}
-                        className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-[11px] font-semibold flex items-center gap-1.5 shadow-xs transition cursor-pointer"
-                        title="Ubah teks ini menjadi Model Geometri 3D"
-                      >
-                        <Box className="w-3 h-3" />
-                        <span>Ubah ke Model 3D</span>
-                      </button>
-                    )}
-
-                    {/* Transform to 2D Net/Shape */}
-                    {(detected === "2d_shape" || /jaring|persegi|segitiga|lingkaran/i.test(note.rawText || note.latex)) && (
-                      <button
-                        type="button"
-                        onClick={() => handleTransformTo2D(note.rawText || note.latex)}
-                        className="px-2.5 py-1 rounded-lg bg-purple-500 hover:bg-purple-600 text-white text-[11px] font-semibold flex items-center gap-1.5 shadow-xs transition cursor-pointer"
-                        title="Ubah teks ini menjadi Bentangan / Jaring-Jaring 2D"
-                      >
-                        <Layers className="w-3 h-3" />
-                        <span>Ubah ke Diagram 2D</span>
-                      </button>
-                    )}
-
-                    {/* Fallback buttons if type is not specifically detected */}
-                    {!detected && noteIsMath && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => handleTransformToGraph(note.rawText || note.latex)}
-                          className="px-2 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.08] text-[11px] font-medium text-blue-600 dark:text-blue-400 flex items-center gap-1 transition cursor-pointer"
-                        >
-                          📈 Grafik 2D
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleTransformTo3D(note.rawText || note.latex)}
-                          className="px-2 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.08] text-[11px] font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1 transition cursor-pointer"
-                        >
-                          🧊 3D Solid
-                        </button>
-                      </>
-                    )}
-
-                    {/* Konversi teks <-> KaTeX (auto-detect saat catatan dipilih) */}
-                    {!noteIsMath && looksLikeMath(note.rawText || "") && (
+                    {/* 1. Ubah Teks Biasa <-> Rumus LaTeX */}
+                    {!noteIsMath ? (
                       <button
                         type="button"
                         onClick={() =>
@@ -5027,14 +5840,13 @@ export default function InteractiveCanvas3D({
                             )
                           )
                         }
-                        className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-semibold flex items-center gap-1.5 shadow-xs transition cursor-pointer"
-                        title="Teks ini terbaca seperti rumus - tampilkan sebagai KaTeX"
+                        className="px-2.5 py-1 rounded-lg bg-[#09090b] hover:bg-zinc-800 dark:bg-white dark:hover:bg-zinc-200 text-white dark:text-[#09090b] text-[11px] font-semibold flex items-center gap-1.5 shadow-2xs transition cursor-pointer"
+                        title="Ubah teks biasa ini menjadi format rumus matematika LaTeX"
                       >
-                        <Sparkles className="w-3 h-3" />
-                        <span>Jadikan KaTeX</span>
+                        <span className="font-serif font-bold text-xs leading-none">∑</span>
+                        <span>Rumus LaTeX</span>
                       </button>
-                    )}
-                    {noteIsMath && (
+                    ) : (
                       <button
                         type="button"
                         onClick={() =>
@@ -5042,13 +5854,35 @@ export default function InteractiveCanvas3D({
                             prev.map((n) => (n.id === note.id ? { ...n, kind: "text" } : n))
                           )
                         }
-                        className="px-2 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.08] text-[11px] font-medium text-slate-600 dark:text-zinc-300 flex items-center gap-1 transition cursor-pointer"
-                        title="Tampilkan catatan ini sebagai teks biasa"
+                        className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-white/[0.08] dark:hover:bg-white/[0.14] text-slate-700 dark:text-zinc-200 text-[11px] font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                        title="Kembalikan ke tampilan teks biasa"
                       >
                         <Type className="w-3 h-3" />
-                        <span>Teks biasa</span>
+                        <span>Teks Biasa</span>
                       </button>
                     )}
+
+                    {/* 2. Jadi 2D (Grafik Kartesius / Bangun Datar / Jaring 2D) */}
+                    <button
+                      type="button"
+                      onClick={() => handleTransformTo2D(note.rawText || note.latex)}
+                      className="px-2.5 py-1 rounded-lg bg-blue-500/10 hover:bg-blue-500 hover:text-white text-blue-600 dark:text-blue-400 dark:hover:text-white border border-blue-500/20 text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer"
+                      title="Visualisasikan menjadi Grafik atau Bidang 2D"
+                    >
+                      <Layers className="w-3 h-3" />
+                      <span>Jadi 2D</span>
+                    </button>
+
+                    {/* 3. Jadi 3D (Bangun Ruang / Permukaan 3D) */}
+                    <button
+                      type="button"
+                      onClick={() => handleTransformTo3D(note.rawText || note.latex)}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500 hover:text-white text-emerald-600 dark:text-emerald-400 dark:hover:text-white border border-emerald-500/20 text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer"
+                      title="Visualisasikan menjadi Model Geometri 3D"
+                    >
+                      <Box className="w-3 h-3" />
+                      <span>Jadi 3D</span>
+                    </button>
 
                     <div className="w-[1px] h-4 bg-slate-200 dark:bg-white/10 mx-0.5" />
 
@@ -5064,7 +5898,7 @@ export default function InteractiveCanvas3D({
                         })
                       }
                       className="p-1 rounded-lg text-slate-500 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.08] transition cursor-pointer"
-                      title="Edit Rumus Langsung"
+                      title="Edit Teks (Klik 2x)"
                     >
                       <Edit3 className="w-3.5 h-3.5" />
                     </button>
@@ -5074,82 +5908,37 @@ export default function InteractiveCanvas3D({
                       type="button"
                       onClick={() => handleDeleteFormula(note.id)}
                       className="p-1 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-500/10 transition cursor-pointer"
-                      title="Hapus Rumus"
+                      title="Hapus (Del)"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
 
-                  {/* 4 Corner Anchors for Active Selection (Matching Smartboard in Video) */}
-                  <span className="absolute -top-[7px] -left-[7px] w-3.5 h-3.5 rounded-[4px] bg-white border-2 border-amber-500 shadow pointer-events-none" />
-                  <span className="absolute -top-[7px] -right-[7px] w-3.5 h-3.5 rounded-[4px] bg-white border-2 border-amber-500 shadow pointer-events-none" />
-                  <span className="absolute -bottom-[7px] -left-[7px] w-3.5 h-3.5 rounded-[4px] bg-white border-2 border-amber-500 shadow pointer-events-none" />
-                  <span className="absolute -bottom-[7px] -right-[7px] w-3.5 h-3.5 rounded-[4px] bg-white border-2 border-amber-500 shadow pointer-events-none" />
+                  {/* 4 Figma-style Corner Handles for Active Selection */}
+                  <span className="absolute -top-[5px] -left-[5px] w-2.5 h-2.5 bg-white border-2 border-[#0d99ff] shadow-2xs pointer-events-none" />
+                  <span className="absolute -top-[5px] -right-[5px] w-2.5 h-2.5 bg-white border-2 border-[#0d99ff] shadow-2xs pointer-events-none" />
+                  <span className="absolute -bottom-[5px] -left-[5px] w-2.5 h-2.5 bg-white border-2 border-[#0d99ff] shadow-2xs pointer-events-none" />
+                  <span className="absolute -bottom-[5px] -right-[5px] w-2.5 h-2.5 bg-white border-2 border-[#0d99ff] shadow-2xs pointer-events-none" />
                 </>
               )}
 
-              {/* Card mini-toolbar */}
-              <div className="flex items-center justify-between gap-3 mb-1.5 opacity-60 group-hover:opacity-100 transition-opacity">
-                <div
-                  onPointerDown={(e) => handleFormulaPointerDown(note.id, e)}
-                  className="cursor-grab active:cursor-grabbing p-1 -ml-1 rounded hover:bg-black/5 dark:hover:bg-white/10 flex items-center gap-1 text-[10px] font-mono text-slate-500 dark:text-zinc-400"
-                  title="Tahan & geser untuk memindahkan posisi rumus di kanvas"
-                >
-                  <Move className="w-3 h-3 text-slate-500 dark:text-zinc-400" />
-                  <span className="text-[9px] uppercase tracking-wider font-semibold">{noteIsMath ? "KaTeX" : "Teks"}</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setInlineComposer({
-                        x: note.x,
-                        y: note.y,
-                        text: note.rawText || note.latex,
-                        id: note.id,
-                      })
-                    }
-                    className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 text-slate-500 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white transition cursor-pointer"
-                    title="Edit Rumus Langsung"
-                  >
-                    <Edit3 className="w-3 h-3" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteFormula(note.id)}
-                    className="p-1 rounded hover:bg-red-500/10 text-slate-400 hover:text-red-500 transition cursor-pointer"
-                    title="Hapus Rumus"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Sharp KaTeX Formula Rendering */}
+              {/* Content: Plain Text by default, or KaTeX when transformed */}
               <div
-                className={`cursor-pointer overflow-x-auto ${
+                className={`overflow-x-auto ${
                   note.fontSize === "sm"
                     ? "text-xs"
                     : note.fontSize === "lg"
                     ? "text-lg font-medium"
                     : note.fontSize === "xl"
                     ? "text-2xl font-bold"
-                    : "text-base font-normal"
+                    : "text-sm font-medium"
                 }`}
-                onDoubleClick={() =>
-                  setInlineComposer({
-                    x: note.x,
-                    y: note.y,
-                    text: note.rawText || note.latex,
-                    id: note.id,
-                  })
-                }
-                title="Klik untuk memilih, atau klik dua kali untuk mengedit"
+                title="Klik untuk memilih & ubah ke LaTeX / 2D / 3D, atau klik 2x untuk mengedit teks"
               >
                 {noteIsMath ? (
                   <MathView math={note.latex} block />
                 ) : (
-                  <div className="whitespace-pre-wrap break-words leading-snug text-slate-800 dark:text-zinc-100">
+                  <div className="whitespace-pre-wrap break-words leading-snug text-slate-900 dark:text-zinc-100">
                     {note.rawText || note.latex}
                   </div>
                 )}
@@ -5158,7 +5947,7 @@ export default function InteractiveCanvas3D({
           );
         })}
 
-        {/* Marquee Drag-to-Select Box */}
+        {/* Figma-Style Marquee Drag-to-Select Box */}
         {selectionMarquee && (
           <div
             style={{
@@ -5167,245 +5956,193 @@ export default function InteractiveCanvas3D({
               width: `${Math.abs(selectionMarquee.currentX - selectionMarquee.startX)}%`,
               height: `${Math.abs(selectionMarquee.currentY - selectionMarquee.startY)}%`,
             }}
-            className="absolute z-30 border-2 border-dashed border-amber-500 bg-amber-500/10 rounded-xl pointer-events-none transition-none"
+            className="absolute z-30 border border-[#0d99ff] bg-[#0d99ff]/10 pointer-events-none transition-none"
           />
         )}
 
-        {/* Inline On-Canvas Direct Typing Box */}
+        {/* Direct Figma-Style Inline Canvas Text Input */}
         {inlineComposer && (
           <div
             style={{ left: `${inlineComposer.x}%`, top: `${inlineComposer.y}%` }}
-            className="absolute z-40 -translate-x-2 -translate-y-2 min-w-[280px] max-w-md p-3 rounded-2xl liquid-glass-popup border-2 border-amber-500/80 shadow-2xl animate-liquid-pop select-none text-slate-800 dark:text-zinc-200"
+            className="absolute z-40 inline-flex items-center rounded-md bg-white/95 dark:bg-[#0d1017]/95 backdrop-blur-xs border-2 border-[#0d99ff] px-2.5 py-1.5 shadow-md"
             onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between pb-1.5 mb-2 border-b border-slate-100 dark:border-white/[0.08] text-[11px] font-medium text-slate-500 dark:text-zinc-400">
-              <span className="flex items-center gap-1.5">
-                <Type className="w-3.5 h-3.5 text-amber-500" />
-                <span>Tulis di Kanvas</span>
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const text = inlineComposer.text;
-                    const editingId = inlineComposer.id;
-                    setInlineComposer(null);
-                    if (editingId) {
-                      const note = formulaNotes.find((n) => n.id === editingId);
-                      if (note) {
-                        handleOpenEditFormula(note);
-                        return;
-                      }
-                    }
-                    handleOpenNewFormula();
-                    if (text) setLatexDraft(autoFormatToLatex(text));
-                  }}
-                  className="text-[10px] text-amber-600 dark:text-amber-400 hover:underline cursor-pointer"
-                  title="Buka panel simbol matematika lengkap dan palet warna"
-                >
-                  Simbol &amp; Palet ↗
-                </button>
-                <span className="text-[10px] text-slate-400">Teks / KaTeX otomatis</span>
-              </div>
-            </div>
-
-            {/* Live Auto-KaTeX Preview */}
-            <div className="min-h-[36px] px-3 py-2 mb-2 rounded-xl bg-slate-100/90 dark:bg-black/40 border border-slate-200/80 dark:border-white/10 flex items-center justify-center text-sm font-medium overflow-x-auto text-slate-900 dark:text-white">
-              {inlineComposer.text.trim() ? (
-                looksLikeMath(inlineComposer.text) ? (
-                  <MathView math={autoFormatToLatex(inlineComposer.text)} block={false} />
-                ) : (
-                  <span className="text-sm text-slate-800 dark:text-zinc-100">{inlineComposer.text}</span>
-                )
-              ) : (
-                <span className="text-xs text-slate-400 dark:text-zinc-500 italic">
-                  Tulis teks biasa, atau rumus seperti a^2 + b^2 = c^2 - rumus otomatis tampil sebagai KaTeX
-                </span>
-              )}
-            </div>
-
-            {/* Direct Input Field */}
-            <div className="flex items-center gap-1.5">
-              <input
-                type="text"
-                value={inlineComposer.text}
-                onChange={(e) => setInlineComposer({ ...inlineComposer, text: e.target.value })}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    commitInlineComposer();
-                  } else if (e.key === "Escape") {
-                    setInlineComposer(null);
-                  }
-                }}
-                placeholder="Tulis teks atau rumus, lalu Enter..."
-                className="flex-1 bg-white dark:bg-[#121520] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-amber-500 transition shadow-inner"
-                autoFocus
-              />
-              <button
-                type="button"
-                onClick={commitInlineComposer}
-                disabled={!inlineComposer.text.trim()}
-                className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-30 text-white text-xs font-semibold shadow-xs transition cursor-pointer flex items-center gap-1"
-                title="Simpan ke Papan (Enter)"
-              >
-                <Check className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Pasang</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setInlineComposer(null)}
-                className="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] transition cursor-pointer"
-                title="Batal (Esc)"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
+            <span className="absolute -top-[5px] -left-[5px] w-2 h-2 bg-white border-2 border-[#0d99ff] pointer-events-none" />
+            <span className="absolute -top-[5px] -right-[5px] w-2 h-2 bg-white border-2 border-[#0d99ff] pointer-events-none" />
+            <span className="absolute -bottom-[5px] -left-[5px] w-2 h-2 bg-white border-2 border-[#0d99ff] pointer-events-none" />
+            <span className="absolute -bottom-[5px] -right-[5px] w-2 h-2 bg-white border-2 border-[#0d99ff] pointer-events-none" />
+            <input
+              ref={inlineInputRef}
+              type="text"
+              size={Math.max(16, (inlineComposer.text || "").length + 3)}
+              value={inlineComposer.text}
+              onChange={(e) => setInlineComposer({ ...inlineComposer, text: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitInlineComposer();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setInlineComposer(null);
+                  setIsTypingToolActive(false);
+                }
+              }}
+              placeholder="Ketik teks atau rumus..."
+              className="bg-transparent text-sm font-medium text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none min-w-[140px]"
+              autoFocus
+            />
           </div>
         )}
 
         {/* F. FLOATING ZAP AI COPILOT ASSISTANT (Bottom-Right Chatbot Widget) */}
-        <div className="absolute bottom-4 right-4 z-30 flex flex-col items-end">
-          {isAiWidgetOpen ? (
-            <div className="w-[380px] max-w-[calc(100vw-32px)] rounded-3xl bg-white dark:bg-[#121520] border border-slate-200 dark:border-white/10 shadow-2xl p-4.5 animate-liquid-pop origin-bottom-right space-y-3.5 select-none text-slate-800 dark:text-zinc-200 ring-1 ring-black/5 dark:ring-white/5">
-              {/* Header */}
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-white/[0.06]">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-amber-500/15 dark:bg-amber-400/20 border border-amber-500/30 flex items-center justify-center text-amber-600 dark:text-amber-400 shadow-xs">
-                    <ZapLogo className="w-4.5 h-4.5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <h4 className="text-xs font-bold text-slate-900 dark:text-white tracking-tight">
-                        ZAP Geometry Copilot
-                      </h4>
-                      <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-amber-500/10 dark:bg-amber-400/15 text-amber-700 dark:text-amber-300 font-semibold border border-amber-500/20">
-                        AI
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-500 dark:text-zinc-400 flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                      Siap - sintesis bangun ruang &amp; rumus instan
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsAiWidgetOpen(false)}
-                  className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors cursor-pointer"
-                  title="Tutup ZAP Copilot"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              {/* Suggestion Chips */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-mono font-semibold tracking-wider uppercase text-slate-400 dark:text-zinc-500">
-                    Template Siap Pakai
-                  </span>
-                  <span className="text-[10px] text-slate-400 dark:text-zinc-500">Klik untuk pasang</span>
-                </div>
-                <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto pr-0.5">
-                  {[
-                    { label: "Kubus 10 cm", query: "kubus 10cm" },
-                    { label: "Prisma Segitiga 3D", query: "prisma segitiga 3d 10cm" },
-                    { label: "Piramida Limas 3D", query: "limas segi empat 3d" },
-                    { label: "Jaring Kubus 2D", query: "jaring-jaring kubus 2d" },
-                    { label: "Jaring Prisma 2D", query: "jaring-jaring prisma 2d" },
-                    { label: "Jaring Limas 2D", query: "jaring limas 2d" },
-                    { label: "Lingkaran 2D (r=7)", query: "lingkaran r=7cm" },
-                    { label: "Persegi Panjang (14×8)", query: "persegi panjang 14x8" },
-                    { label: "Tabung Silinder", query: "tabung r=7 t=12" },
-                    { label: "Parabola y = x² - 3", query: "y=x^2-3" },
-                  ].map((chip) => (
-                    <button
-                      key={chip.label}
-                      type="button"
-                      onClick={() => {
-                        setAiWidgetInput(chip.query);
-                        triggerAiSynthesize(chip.query);
-                      }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-50 hover:bg-amber-500/10 dark:bg-white/[0.04] dark:hover:bg-amber-400/10 border border-slate-200/80 hover:border-amber-400/40 dark:border-white/[0.08] dark:hover:border-amber-400/30 text-[11px] font-medium text-slate-700 hover:text-amber-700 dark:text-zinc-300 dark:hover:text-amber-300 transition-all duration-150 hover:-translate-y-px active:translate-y-0 text-left truncate cursor-pointer shadow-2xs group"
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-zinc-600 group-hover:bg-amber-500 transition-colors shrink-0" />
-                      <span className="truncate">{chip.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Input Form */}
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  triggerAiSynthesize(aiWidgetInput);
-                }}
-                className="space-y-2 pt-1"
+        {!hideCopilot && (
+        <div className="absolute bottom-[4.25rem] right-3 sm:bottom-[4.25rem] sm:right-3.5 z-40 flex flex-col items-end gap-2.5">
+          <AnimatePresence>
+            {isAiWidgetOpen && (
+              <motion.div
+                key="zap-copilot-card"
+                initial={{ opacity: 0, y: 10, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 8, scale: 0.96 }}
+                transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                className="w-[320px] sm:w-[340px] max-w-[calc(100vw-28px)] rounded-2xl bg-white/98 dark:bg-[#121318]/98 backdrop-blur-xl border border-slate-200/90 dark:border-white/[0.09] shadow-[0_12px_36px_-8px_rgba(15,23,42,0.12),0_2px_6px_0_rgba(15,23,42,0.04)] dark:shadow-[0_18px_44px_-8px_rgba(0,0,0,0.65)] overflow-hidden select-none text-slate-800 dark:text-zinc-200 origin-bottom-right"
               >
-                <div className="relative flex items-center">
-                  <input
-                    type="text"
-                    value={aiWidgetInput}
-                    onChange={(e) => setAiWidgetInput(e.target.value)}
-                    placeholder="Misal: prisma segitiga 10cm, kubus, tabung..."
-                    className="w-full bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/10 rounded-full pl-4 pr-11 py-2.5 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-amber-500 dark:focus:border-amber-400 focus:ring-2 focus:ring-amber-500/20 transition shadow-inner"
-                    autoFocus
-                  />
+                {/* Header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-white/[0.06]">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-7 h-7 rounded-lg bg-[#09090b] dark:bg-white text-white dark:text-[#09090b] flex items-center justify-center shadow-2xs shrink-0">
+                      <ZapLogo className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <h4 className="text-xs font-bold text-slate-900 dark:text-white tracking-tight">
+                          ZAP Copilot
+                        </h4>
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                      </div>
+                      <p className="text-[10px] text-slate-500 dark:text-zinc-400 leading-tight">
+                        Sintesis bangun ruang &amp; rumus
+                      </p>
+                    </div>
+                  </div>
                   <button
-                    type="submit"
-                    disabled={!aiWidgetInput.trim()}
-                    className="absolute right-1.5 p-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 active:scale-95 disabled:opacity-30 disabled:pointer-events-none text-white transition cursor-pointer shadow-xs flex items-center justify-center"
-                    title="Kirim dan buat di papan"
+                    type="button"
+                    onClick={() => setIsAiWidgetOpen(false)}
+                    className="w-6 h-6 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors cursor-pointer"
+                    title="Tutup Copilot"
                   >
-                    <Send className="w-3.5 h-3.5" />
+                    <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
-                {aiWidgetFeedback && (
-                  <div className="text-[11px] text-emerald-700 dark:text-emerald-300 font-medium flex items-center gap-1.5 animate-fadeIn bg-emerald-500/10 border border-emerald-500/25 rounded-xl px-2.5 py-2">
-                    <Check className="w-3.5 h-3.5 shrink-0" />
-                    <span>{aiWidgetFeedback}</span>
+
+                {/* Chat / Assistant Body */}
+                <div className="p-3.5 space-y-3">
+                  {/* Assistant Status / Response Bubble */}
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-white/[0.03] border border-slate-200/60 dark:border-white/[0.06] text-[11px] text-slate-600 dark:text-zinc-300 leading-relaxed">
+                    {aiWidgetFeedback ? (
+                      <div className="flex items-start gap-2 text-slate-900 dark:text-white font-medium">
+                        <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                        <span>{aiWidgetFeedback}</span>
+                      </div>
+                    ) : (
+                      <span>
+                        Ketik bangun ruang, grafik fungsi, atau pilih pintasan di bawah untuk langsung ditampilkan ke papan.
+                      </span>
+                    )}
                   </div>
-                )}
-                <p className="text-[10px] text-slate-400 dark:text-zinc-500 leading-relaxed">
-                  Enter untuk membuat. Permintaan ditafsirkan dulu, lalu mesin geometri yang memutuskan bangun akhirnya - tidak asal menggambar.
-                </p>
-              </form>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => { setIsAiWidgetOpen(true); setCopilotSeen(true); }}
-              className="group relative flex items-center h-12 w-12 hover:w-auto hover:pr-4.5 rounded-full bg-white/40 dark:bg-black/40 backdrop-blur-2xl border border-white/60 dark:border-white/20 shadow-2xl transition-all duration-300 ease-out cursor-pointer active:scale-95 overflow-hidden hover:border-amber-400/50 hover:shadow-amber-500/20"
-              title="Buka ZAP AI Copilot untuk membuat bangun 2D/3D & rumus"
-            >
-              {/* Badge penarik perhatian sampai copilot pertama kali dibuka */}
-              {!copilotSeen && (
-                <span className="absolute top-0 right-0 flex h-3.5 w-3.5 z-10">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-amber-500 border-2 border-white dark:border-zinc-900" />
-                </span>
-              )}
-              {/* Symmetrically Centered 48px Icon Footprint (Zero Displacement on Hover) */}
-              <div className="w-12 h-12 flex items-center justify-center shrink-0">
-                <div className="w-9 h-9 rounded-full bg-amber-500/20 dark:bg-amber-400/25 border border-amber-500/40 dark:border-amber-400/40 flex items-center justify-center text-amber-500 dark:text-amber-400 shadow-inner group-hover:scale-110 transition-transform">
-                  <ZapLogo className="w-5 h-5 text-amber-500 dark:text-amber-400 drop-shadow-[0_2px_8px_rgba(245,158,11,0.6)]" />
+
+                  {/* Quick Prompt Pills */}
+                  <div className="space-y-1.5">
+                    <span className="text-[10px] font-medium text-slate-400 dark:text-zinc-500 px-0.5 block">
+                      Pintasan cepat
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[
+                        { label: "Kubus 10 cm", query: "kubus 10cm" },
+                        { label: "Prisma Segitiga", query: "prisma segitiga 3d 10cm" },
+                        { label: "Limas 3D", query: "limas segi empat 3d" },
+                        { label: "Jaring Kubus", query: "jaring-jaring kubus 2d" },
+                        { label: "Tabung", query: "tabung r=7 t=12" },
+                        { label: "Lingkaran r=7", query: "lingkaran r=7cm" },
+                        { label: "y = x² - 3", query: "y=x^2-3" },
+                      ].map((chip) => (
+                        <button
+                          key={chip.label}
+                          type="button"
+                          onClick={() => {
+                            setAiWidgetInput(chip.query);
+                            triggerAiSynthesize(chip.query);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-slate-100/90 hover:bg-slate-900 hover:text-white dark:bg-white/[0.05] dark:hover:bg-white dark:hover:text-[#09090b] border border-slate-200/70 dark:border-white/[0.07] text-[11px] font-medium text-slate-700 dark:text-zinc-300 transition-colors cursor-pointer"
+                        >
+                          {chip.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Input Form */}
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      triggerAiSynthesize(aiWidgetInput);
+                    }}
+                    className="pt-0.5"
+                  >
+                    <div className="relative flex items-center">
+                      <input
+                        type="text"
+                        value={aiWidgetInput}
+                        onChange={(e) => setAiWidgetInput(e.target.value)}
+                        placeholder="Buat kubus, prisma, atau rumus..."
+                        className="w-full bg-slate-50 dark:bg-white/[0.04] border border-slate-200/90 dark:border-white/10 rounded-xl pl-3 pr-9 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-slate-900 dark:focus:border-white/50 transition"
+                        autoFocus
+                      />
+                      <button
+                        type="submit"
+                        disabled={!aiWidgetInput.trim()}
+                        className="absolute right-1.5 w-6 h-6 rounded-lg bg-[#09090b] hover:bg-zinc-800 dark:bg-white dark:hover:bg-zinc-200 active:scale-95 disabled:opacity-30 disabled:pointer-events-none text-white dark:text-[#09090b] transition cursor-pointer flex items-center justify-center"
+                        title="Kirim"
+                      >
+                        <Send className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </form>
                 </div>
-              </div>
-              {/* Expanding Label on Hover */}
-              <div className="flex flex-col text-left opacity-0 max-w-0 group-hover:opacity-100 group-hover:max-w-[220px] transition-all duration-300 ease-out whitespace-nowrap overflow-hidden pl-0.5">
-                <span className="text-xs font-semibold text-slate-900 dark:text-white leading-tight flex items-center gap-1">
-                  ZAP AI Copilot
-                  <Sparkles className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Logo -> Hover -> Capsule Trigger Button */}
+          <button
+            type="button"
+            onClick={() => {
+              setIsAiWidgetOpen((prev) => !prev);
+              setCopilotSeen(true);
+            }}
+            className="group relative flex items-center h-9 p-1 rounded-full bg-white/95 dark:bg-[#14161e]/95 backdrop-blur-xl border border-slate-200/80 dark:border-white/[0.08] shadow-[0_4px_20px_-2px_rgba(15,23,42,0.08)] dark:shadow-[0_8px_28px_-4px_rgba(0,0,0,0.5)] hover:border-slate-300 dark:hover:border-white/20 transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] cursor-pointer active:scale-95"
+            title="ZAP Copilot — Buat bangun 2D/3D & rumus"
+          >
+            {!copilotSeen && !isAiWidgetOpen && (
+              <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2 z-10">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-slate-400 dark:bg-zinc-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-[#09090b] dark:bg-white border border-white dark:border-zinc-900" />
+              </span>
+            )}
+            <div className="w-7 h-7 rounded-full bg-[#09090b] dark:bg-white text-white dark:text-[#09090b] flex items-center justify-center shrink-0 transition-transform duration-300 group-hover:scale-105">
+              <ZapLogo className="w-3.5 h-3.5" />
+            </div>
+            <div className="grid grid-cols-[0fr] group-hover:grid-cols-[1fr] transition-[grid-template-columns] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]">
+              <div className="overflow-hidden flex items-center">
+                <span className="pl-2 pr-2.5 text-xs font-semibold text-slate-900 dark:text-white whitespace-nowrap tracking-tight">
+                  Copilot
                 </span>
-                <span className="text-[10px] text-slate-600 dark:text-zinc-400 leading-tight">
-                  Buat 2D, 3D, atau Rumus
-                </span>
               </div>
-            </button>
-          )}
+            </div>
+          </button>
         </div>
+        )}
 
         {/* Kursor kolaborator (gaya Figma: panah berwarna + label nama) */}
         {Object.entries(remoteCursors).map(([pid, c]) => (
@@ -5424,18 +6161,20 @@ export default function InteractiveCanvas3D({
         ))}
 
         {/* DOCK ALAT BAWAH: dock magnifikasi (framer-motion) + aksi dinamis sesuai konteks seleksi */}
-        <div className="absolute bottom-2 left-3 sm:left-1/2 sm:-translate-x-1/2 z-30 max-w-[calc(100%-4.75rem)] sm:max-w-[calc(100%-2rem)]">
-          <Dock
-            className="items-end pb-2 gap-1.5 sm:gap-2 px-2.5 liquid-glass-popup border border-slate-200 dark:border-white/10 shadow-xl rounded-[26px]"
-            panelHeight={58}
-            magnification={70}
-            distance={110}
-          >
+        <div className="absolute bottom-2.5 inset-x-0 z-40 flex justify-center pointer-events-none px-2 sm:px-3">
+          <div className="no-scrollbar w-max max-w-full overflow-x-auto sm:overflow-visible pointer-events-auto touch-pan-x overscroll-x-contain py-1">
+            <Dock
+              className="gap-1 px-2 py-1 rounded-full sm:gap-1.5 sm:px-2.5 shrink-0"
+              panelHeight={dockBaseSize + 10}
+              magnification={dockBaseSize + 16}
+              distance={100}
+              baseSize={dockBaseSize}
+            >
             {/* Ketik Rumus / Teks */}
             <DockItem
               className={`aspect-square rounded-full border ${
                 isTypingToolActive
-                  ? "bg-amber-500 text-white border-amber-400 shadow-lg shadow-amber-500/30"
+                  ? "bg-[#09090b] dark:bg-white text-white dark:text-[#09090b] border-[#09090b] dark:border-white shadow-xs"
                   : "bg-slate-100/90 dark:bg-white/[0.07] text-slate-700 dark:text-zinc-200 border-slate-200/70 dark:border-white/[0.08]"
               }`}
             >
@@ -5511,6 +6250,20 @@ export default function InteractiveCanvas3D({
               </DockIcon>
             </DockItem>
 
+            {/* Sisipkan / Tempel Gambar ke Smartboard */}
+            <DockItem className="aspect-square rounded-full border bg-slate-100/90 dark:bg-white/[0.07] text-slate-600 dark:text-zinc-300 border-slate-200/70 dark:border-white/[0.08]">
+              <DockLabel>Sisipkan / Tempel Gambar (Ctrl+V)</DockLabel>
+              <DockIcon>
+                <ImagePlus className="w-full h-full" />
+                <button
+                  type="button"
+                  aria-label="Sisipkan atau Tempel Gambar"
+                  onClick={() => boardImageInputRef.current?.click()}
+                  className="absolute inset-0 rounded-full cursor-pointer"
+                />
+              </DockIcon>
+            </DockItem>
+
             {/* Hapus coretan (dinamis: hanya saat ada coretan) */}
             {hasDrawings && (
               <DockItem className="aspect-square rounded-full border bg-slate-100/90 dark:bg-white/[0.07] text-slate-600 dark:text-zinc-300 border-slate-200/70 dark:border-white/[0.08]">
@@ -5567,6 +6320,7 @@ export default function InteractiveCanvas3D({
                     />
                   </DockIcon>
                 </DockItem>
+                {!hideHud && (
                 <DockItem
                   className={`aspect-square rounded-full border ${
                     isHudVisible
@@ -5581,6 +6335,50 @@ export default function InteractiveCanvas3D({
                       type="button"
                       aria-label="Toggle Panel Metrik"
                       onClick={() => setIsHudVisible(!isHudVisible)}
+                      className="absolute inset-0 rounded-full cursor-pointer"
+                    />
+                  </DockIcon>
+                </DockItem>
+                )}
+                <DockItem
+                  className={`aspect-square rounded-full border ${
+                    showHandles
+                      ? "bg-slate-300 dark:bg-white/[0.18] text-slate-900 dark:text-white border-slate-400/50 dark:border-white/20"
+                      : "bg-slate-100/90 dark:bg-white/[0.07] text-slate-600 dark:text-zinc-300 border-slate-200/70 dark:border-white/[0.08]"
+                  }`}
+                >
+                  <DockLabel>{showHandles ? "Sembunyikan Titik Sudut (Handle)" : "Tampilkan Titik Sudut (Handle)"}</DockLabel>
+                  <DockIcon>
+                    <CircleDot className="w-full h-full" />
+                    <button
+                      type="button"
+                      aria-label="Toggle Titik Sudut Handle"
+                      onClick={() => setShowHandles(!showHandles)}
+                      className="absolute inset-0 rounded-full cursor-pointer"
+                    />
+                  </DockIcon>
+                </DockItem>
+              </>
+            )}
+
+            {/* Grup 2D (dinamis: saat grafik atau geometri 2D aktif) */}
+            {!is3DModel && (activeModel === "2d_quadratic" || activeModel === "2d_shape" || activeModel === "2d_circle") && (
+              <>
+                <div className="w-px h-8 bg-slate-300/70 dark:bg-white/10 mx-0.5 self-center shrink-0" />
+                <DockItem
+                  className={`aspect-square rounded-full border ${
+                    showHandles
+                      ? "bg-slate-300 dark:bg-white/[0.18] text-slate-900 dark:text-white border-slate-400/50 dark:border-white/20"
+                      : "bg-slate-100/90 dark:bg-white/[0.07] text-slate-600 dark:text-zinc-300 border-slate-200/70 dark:border-white/[0.08]"
+                  }`}
+                >
+                  <DockLabel>{showHandles ? "Sembunyikan Titik Puncak / Sudut" : "Tampilkan Titik Puncak / Sudut"}</DockLabel>
+                  <DockIcon>
+                    <CircleDot className="w-full h-full" />
+                    <button
+                      type="button"
+                      aria-label="Toggle Titik Puncak Sudut"
+                      onClick={() => setShowHandles(!showHandles)}
                       className="absolute inset-0 rounded-full cursor-pointer"
                     />
                   </DockIcon>
@@ -5698,6 +6496,8 @@ export default function InteractiveCanvas3D({
                       type="button"
                       aria-label="Reset / Bersihkan Seluruh Kanvas"
                       onClick={() => {
+                        last3DModelRef.current = "3d_empty";
+                        last2DModelRef.current = "2d_empty";
                         clearBoardShared();
                         setFormulaNotes([]);
                         setSelectedFormulaId(null);
@@ -5715,6 +6515,7 @@ export default function InteractiveCanvas3D({
               </>
             )}
           </Dock>
+          </div>
         </div>
 
         {/* G. KATEX FORMULA COMPOSER MODAL */}

@@ -4,7 +4,8 @@ description: >-
   Master Unified AI Agent Skill & Harness for ZAP (Zero Answer Policy). Combines all ZAP capabilities into
   one skill: (1) Continuous Learning from Conversation Memory (Episodic Agent Harness), (2) Multi-Source
   Verified Internet Crawling & Data Fetching (GSM8K, HuggingFace Datasets API, Wikimedia REST v1 Theorems,
-  Kurikulum Merdeka), (3) Procedural SymPy Math Corpus Synthesis (TK to S3), (4) 2D/3D Spatial Geometry
+  Kurikulum Merdeka), (3) Procedural Machine-Verified Multi-Domain Corpus Synthesis (Matematika TK–S3,
+  Pemrograman, Fisika, Kimia), (4) 2D/3D Spatial Geometry
   Knowledge Base Synchronization, and (5) CFL Engine & Mutation Security Verification.
 ---
 
@@ -20,8 +21,8 @@ All project skills—including **Continuous Conversation Memory Learning**, **Ve
 
 | Pillar | Core Modules | Persistent Storage | Role in the ZAP Agent Harness |
 | :--- | :--- | :--- | :--- |
-| **1. Curriculum Ontology (`TK`–`S3`)** | [`backend/data_engine/taxonomy.py`](../../../backend/data_engine/taxonomy.py) | In-Memory Pydantic Graph | Defines 7 educational tiers (`TK`, `SD`, `SMP`, `SMA`, `S1`, `S2`, `S3`), 18 topics, 34 subtopics, formulas, and WebGL canvas targets. |
-| **2. SymPy Procedural & Web Crawler Corpus** | [`backend/data_engine/generators.py`](../../../backend/data_engine/generators.py)<br>[`backend/data_engine/harvester.py`](../../../backend/data_engine/harvester.py) | [`data/zap_math_corpus.jsonl`](../../../data/zap_math_corpus.jsonl)<br>`data/zap_math_corpus.db` | Synthesizes SymPy-verified derivations AND crawls verified internet math sources (`gsm8k_sample`, `hf_gsm8k_api`, `wikimedia_math_theorems`, `indo_kurikulum_sd`). |
+| **1. Curriculum Ontology (`TK`–`S3` + 3 domain)** | [`backend/data_engine/taxonomy.py`](../../../backend/data_engine/taxonomy.py) | In-Memory Pydantic Graph | Defines 7 educational tiers (`TK`, `SD`, `SMP`, `SMA`, `S1`, `S2`, `S3`), 18 topics, 34 subtopics, plus `DOMAIN_TAXONOMY` for `pemrograman` (3 topics/6 subtopics), `fisika` (4/7), and `kimia` (3/5), with formulas and WebGL canvas targets. |
+| **2. Machine-Verified Procedural & Web Crawler Corpus** | [`backend/data_engine/generators.py`](../../../backend/data_engine/generators.py)<br>[`backend/data_engine/harvester.py`](../../../backend/data_engine/harvester.py) | [`data/zap_math_corpus.jsonl`](../../../data/zap_math_corpus.jsonl)<br>`data/zap_math_corpus.db`<br>`data/harvest_state.json` | Synthesizes SymPy-verified math derivations, Python-AST-verified programming items, numerically verified physics/chemistry items, AND crawls **verified-only** internet math sources (`gsm8k_sample`, `hf_gsm8k_api`, `wikimedia_math_theorems`; `indo_kurikulum_sd` dinonaktifkan karena 404). |
 | **3. 2D/3D Spatial Geometry DB** | [`backend/cfl/geometry_db.py`](../../../backend/cfl/geometry_db.py)<br>[`frontend/data/geometry-database.ts`](../../../frontend/data/geometry-database.ts) | [`data/zap_geometry_database.json`](../../../data/zap_geometry_database.json) | Synchronizes 20 parametric 2D shapes, 3D solids, and 2D foldable nets between SymPy backend and Three.js WebGL smartboard. |
 | **4. CFL & Self-Learning Flywheel** | [`backend/cfl/`](../../../backend/cfl/)<br>[`backend/zapcore/learning.py`](../../../backend/zapcore/learning.py) | `zap_platform.db` (`knowledge_items`) | Deterministic SymPy fault localization, cognitive disequilibrium counter-examples, and Zero-Answer Guardrail (`RobustZeroAnswerGuardrail`). |
 | **5. ZAP Model Agent Harness (Episodic Memory)** | [`backend/data_engine/agent_harness.py`](../../../backend/data_engine/agent_harness.py)<br>[`frontend/app/api/chat/route.ts`](../../../frontend/app/api/chat/route.ts) | [`data/zap_agent_memory.jsonl`](../../../data/zap_agent_memory.jsonl)<br>`agent_episodic_memory` (SQLite) | Continuously learns from user conversations: strips PII, extracts algebraic steps, verifies via SymPy CAS, indexes misconception patterns (`hit_count`), and injects `<ZAP_AGENT_HARNESS_CONTEXT>` into chat turns. |
@@ -36,12 +37,35 @@ All training, internet crawling, memory seeding, auditing, and test verification
 ```powershell
 python .agents/skills/zap-skills/scripts/train_zap_sources.py --train --tier ALL --count 25 --harvest --seed-memory --audit --verify
 ```
+`--train` defaults to `--domain ALL` (matematika TK–S3 + pemrograman + fisika + kimia). Batasi ke satu domain dengan `--domain pemrograman|fisika|kimia|matematika`; gunakan `--tier` untuk memilih jenjang matematika tertentu.
 
 ### B. Crawl & Fetch Verified Internet Math Sources
-Crawls OpenAI GSM8K (GitHub raw), HuggingFace Datasets Server API (`datasets-server.huggingface.co`), Wikimedia REST v1 Mathematical Theorems (`en.wikipedia.org/api/rest_v1`), and Indonesian Kurikulum Merdeka feeds, verifying theorems with SymPy and sanitizing prompts via `RobustZeroAnswerGuardrail`:
+Crawls OpenAI GSM8K (GitHub raw), HuggingFace Datasets Server API (`datasets-server.huggingface.co`), and Wikimedia REST v1 Mathematical Theorems (`en.wikipedia.org/api/rest_v1`), verifying each item with SymPy/arithmetic and sanitizing prompts via `RobustZeroAnswerGuardrail`:
 ```powershell
 python .agents/skills/zap-skills/scripts/train_zap_sources.py --harvest --max-items 25
 ```
+
+**Kebijakan ingest (audit 14 Nov 2026):**
+- **Hanya item `is_verified: True`** yang masuk korpus. Item yang gagal verifikasi dilaporkan sebagai `ditolak (unverified)` dan tidak pernah disimpan.
+- **Idempoten**: menjalankan ulang perintah yang sama tidak menggandakan baris (id deterministik per sumber), sehingga aman dijadwalkan berkala.
+- **Sumber nonaktif tercatat**: `indo_kurikulum_sd` dimatikan karena URL-nya 404 (`ENABLED_SOURCES` / `DISABLED_SOURCES` di `harvester.py`). Aktifkan kembali hanya setelah ada URL kurikulum resmi yang benar-benar dapat diakses.
+- **Jejak auto-upgrade**: setiap putaran ditulis ke `data/harvest_state.json` (timestamp UTC, jumlah per sumber: `fetched`/`verified`/`rejected_unverified`, daftar sumber nonaktif, 20 putaran terakhir).
+- **Kebocoran langkah**: rationale GSM8K disensor pada hasil ekspresi yang sama dengan jawaban akhir (`_redact_final_value_in_steps`), karena field `steps` tidak pernah dikirim ke siswa tetapi tetap tidak boleh memuat kunci jawaban.
+
+**Status sumber terukur (14 Nov 2026):** `gsm8k_sample` 10/10 verified · `hf_gsm8k_api` 10/10 · `wikimedia_math_theorems` 8/8 (8 identitas kini punya pemeriksaan SymPy: Pythagoras, rumus kuadratik, teorema dasar kalkulus, rumus Euler, aturan kosinus, binomial, eliminasi Gauss, nilai eigen) · `indo_kurikulum_sd` dinonaktifkan (404).
+
+**Menjadwalkan auto-upgrade** (pilih salah satu; jalankan dari root repo):
+```powershell
+# Windows Task Scheduler: setiap hari 03:00
+schtasks /create /tn "ZAP Harvest" /tr "python .agents/skills/zap-skills/scripts/train_zap_sources.py --harvest --max-items 50" /sc daily /st 03:00
+```
+```bash
+# cron: setiap hari 03:00
+0 3 * * * cd /path/to/logicodix && python .agents/skills/zap-skills/scripts/train_zap_sources.py --harvest --max-items 50 >> data/harvest.log 2>&1
+```
+
+**Batas kemampuan (jujur):** harvester ini **bukan** crawler umum. Ia hanya mengambil sumber terstruktur yang didaftarkan di `OPEN_MATH_SOURCES`, dan hanya dapat "memahami" klaim yang bisa dibuktikan mesin (aritmetika GSM8K via anotasi `<<a+b=c>>`, identitas teorema via SymPy). Halaman bebas/teks naratif tidak diurai; domain non-matematika belum punya sumber internet karena belum ada verifikator deterministik untuk teks fisis/kimia/program bebas.
+
 
 ### C. Train & Seed Continuous Conversation Memory (`ZAPAgentHarness`)
 Seed foundational episodic conversation memories or train directly from a live user message turn:

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import {
@@ -259,7 +259,16 @@ interface ModelPickerProps {
   dropUp?: boolean;
 }
 
-export default function ModelPickerWithEffort({
+// Daftar opsi tetap: dibuat sekali di module scope, bukan di setiap render.
+const EFFORT_OPTIONS: readonly ReasoningEffort[] = ["low", "medium", "high"];
+
+function formatEffort(eff: ReasoningEffort): string {
+  if (eff === "high") return "High";
+  if (eff === "medium") return "Medium";
+  return "Low";
+}
+
+function ModelPickerWithEffort({
   selectedModelId,
   onSelectModel,
   reasoningEffort,
@@ -275,8 +284,19 @@ export default function ModelPickerWithEffort({
   const closeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const switchSubmenuTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const currentModel =
-    AVAILABLE_MODELS.find((m) => m.id === selectedModelId) || AVAILABLE_MODELS[0];
+  const currentModel = useMemo(
+    () => AVAILABLE_MODELS.find((m) => m.id === selectedModelId) || AVAILABLE_MODELS[0],
+    [selectedModelId]
+  );
+
+  // Callback parent bisa berubah identitas setiap render (fungsi inline di
+  // halaman chat). Simpan versi terbarunya di ref saat render (pola latest-ref
+  // yang idempoten) agar handler internal tetap stabil dan React.memo di bawah
+  // benar-benar melewati render yang tidak perlu tanpa memakai callback basi.
+  const onSelectModelRef = useRef(onSelectModel);
+  const onChangeEffortRef = useRef(onChangeEffort);
+  onSelectModelRef.current = onSelectModel;
+  onChangeEffortRef.current = onChangeEffort;
 
   useEffect(() => {
     setMounted(true);
@@ -299,19 +319,19 @@ export default function ModelPickerWithEffort({
     };
   }, [isOpen]);
 
-  const handleSelectModel = (model: AIModel) => {
+  const handleSelectModel = useCallback((model: AIModel) => {
     if (typeof window !== "undefined") {
       localStorage.setItem("zap_selected_model_id", model.id);
     }
-    onSelectModel(model);
+    onSelectModelRef.current(model);
     setIsOpen(false);
     setIsLockedOpen(false);
-  };
+  }, []);
 
-  const handleSelectEffort = (effort: ReasoningEffort) => {
-    onChangeEffort(effort);
+  const handleSelectEffort = useCallback((effort: ReasoningEffort) => {
+    onChangeEffortRef.current(effort);
     // Keep menu open so user sees selection and can continue selecting model
-  };
+  }, []);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -331,12 +351,6 @@ export default function ModelPickerWithEffort({
       if (switchSubmenuTimeoutRef.current) clearTimeout(switchSubmenuTimeoutRef.current);
     };
   }, []);
-
-  const formatEffort = (eff: ReasoningEffort) => {
-    if (eff === "high") return "High";
-    if (eff === "medium") return "Medium";
-    return "Low";
-  };
 
   const handleMouseEnterContainer = () => {
     if (typeof window !== "undefined" && window.innerWidth < 580) return;
@@ -418,6 +432,165 @@ export default function ModelPickerWithEffort({
   // Card height clamped strictly to prevent top viewport clipping
   const maxSubmenuHeight = triggerRect ? Math.min(380, Math.max(220, triggerRect.top - 20)) : 360;
 
+  // ---------------------------------------------------------------------------
+  // Daftar opsi panjang di-memo: dibuat ulang hanya ketika pilihan aktif
+  // berubah, bukan pada setiap render (hover, buka/tutup, atau ketikan di
+  // komposer yang memicu render ulang komponen induk).
+  // ---------------------------------------------------------------------------
+  const effortRows = useMemo(
+    () =>
+      EFFORT_OPTIONS.map((opt) => {
+        const isSelected = opt === reasoningEffort;
+        return (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => handleSelectEffort(opt)}
+            className={`w-full flex items-center justify-between px-3 py-2 rounded-xl transition cursor-pointer text-left ${
+              isSelected
+                ? "bg-zinc-900/[0.08] dark:bg-white/[0.14] text-zinc-950 dark:text-white font-semibold"
+                : "text-zinc-800 dark:text-zinc-200 hover:bg-zinc-900/[0.05] dark:hover:bg-white/[0.06]"
+            }`}
+          >
+            <div className="flex flex-col">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-semibold text-zinc-900 dark:text-white">
+                  {formatEffort(opt)}
+                </span>
+                {opt === "low" && (
+                  <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-mono font-medium">
+                    Paling Irit
+                  </span>
+                )}
+                {opt === "high" && (
+                  <span className="text-[11px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-700 dark:text-purple-300 font-mono font-medium">
+                    Maksimal
+                  </span>
+                )}
+              </div>
+              <span className="text-xs text-zinc-600 dark:text-zinc-400 leading-tight mt-0.5">
+                {opt === "high"
+                  ? "Penalaran bertingkat & CoT mendalam"
+                  : opt === "medium"
+                  ? "Keseimbangan kecepatan dan analisis"
+                  : "Respon instan & sangat hemat token"}
+              </span>
+            </div>
+            {isSelected && (
+              <Check className="w-4 h-4 text-zinc-900 dark:text-white shrink-0 ml-2" />
+            )}
+          </button>
+        );
+      }),
+    [reasoningEffort, handleSelectEffort]
+  );
+
+  const desktopEffortRows = useMemo(
+    () =>
+      EFFORT_OPTIONS.map((opt) => {
+        const isSelected = opt === reasoningEffort;
+        return (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => handleSelectEffort(opt)}
+            className={`w-full flex items-center justify-between px-3 py-2 rounded-xl transition cursor-pointer text-left ${
+              isSelected
+                ? "bg-zinc-900/[0.08] dark:bg-white/[0.14] text-zinc-950 dark:text-white font-semibold"
+                : "text-zinc-800 dark:text-zinc-200 hover:bg-zinc-900/[0.05] dark:hover:bg-white/[0.06] hover:text-zinc-950 dark:hover:text-white"
+            }`}
+          >
+            <div className="flex flex-col">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-semibold text-zinc-900 dark:text-white">
+                  {formatEffort(opt)}
+                </span>
+                {opt === "low" && (
+                  <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-mono font-medium">
+                    Paling Irit
+                  </span>
+                )}
+                {opt === "high" && (
+                  <span className="text-[11px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-700 dark:text-purple-300 font-mono font-medium">
+                    Maksimal
+                  </span>
+                )}
+              </div>
+              <span className="text-xs text-zinc-600 dark:text-zinc-400 leading-tight mt-0.5">
+                {opt === "high"
+                  ? "Penalaran bertingkat & CoT mendalam"
+                  : opt === "medium"
+                  ? "Keseimbangan kecepatan dan analisis"
+                  : "Respon instan & sangat hemat token"}
+              </span>
+            </div>
+            {isSelected && (
+              <Check className="w-4 h-4 text-zinc-900 dark:text-white shrink-0 ml-2" />
+            )}
+          </button>
+        );
+      }),
+    [reasoningEffort, handleSelectEffort]
+  );
+
+  const compactModelRows = useMemo(
+    () =>
+      AVAILABLE_MODELS.map((model) => {
+        const isSelected = model.id === currentModel.id;
+        const Icon = model.icon;
+        return (
+          <button
+            key={model.id}
+            type="button"
+            onClick={() => handleSelectModel(model)}
+            className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-medium transition cursor-pointer text-left ${
+              isSelected
+                ? "bg-zinc-900/[0.08] dark:bg-white/[0.14] text-zinc-950 dark:text-white font-semibold"
+                : "text-zinc-800 dark:text-zinc-200 hover:bg-zinc-900/[0.05] dark:hover:bg-white/[0.06]"
+            }`}
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <Icon className={`w-4 h-4 shrink-0 ${model.iconColor || "text-zinc-500"}`} />
+              <span className="truncate">{model.name}</span>
+            </div>
+            {isSelected && (
+              <Check className="w-3.5 h-3.5 text-zinc-900 dark:text-white shrink-0 ml-1.5" />
+            )}
+          </button>
+        );
+      }),
+    [currentModel.id, handleSelectModel]
+  );
+
+  const desktopModelRows = useMemo(
+    () =>
+      AVAILABLE_MODELS.map((model) => {
+        const isSelected = model.id === currentModel.id;
+        const Icon = model.icon;
+        return (
+          <button
+            key={model.id}
+            type="button"
+            onClick={() => handleSelectModel(model)}
+            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-[12.5px] font-medium transition cursor-pointer text-left ${
+              isSelected
+                ? "bg-zinc-900/[0.08] dark:bg-white/[0.14] text-zinc-950 dark:text-white font-semibold"
+                : "text-zinc-800 dark:text-zinc-200 hover:bg-zinc-900/[0.05] dark:hover:bg-white/[0.06] hover:text-zinc-950 dark:hover:text-white"
+            }`}
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <Icon className={`w-4 h-4 shrink-0 ${model.iconColor || "text-zinc-500"}`} />
+              <span className="truncate">{model.name}</span>
+            </div>
+            {isSelected && (
+              <Check className="w-3.5 h-3.5 text-zinc-900 dark:text-white shrink-0 ml-1.5" />
+            )}
+          </button>
+        );
+      }),
+    [currentModel.id, handleSelectModel]
+  );
+
   return (
     <div
       className="relative inline-block text-left"
@@ -449,20 +622,20 @@ export default function ModelPickerWithEffort({
         aria-expanded={isOpen}
         aria-haspopup="dialog"
         title={`Model: ${currentModel.name} • Effort: ${formatEffort(reasoningEffort)}`}
-        className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 min-h-[28px] rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.06] text-xs text-slate-700 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer select-none whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50"
+        className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 min-h-[28px] rounded-lg hover:bg-zinc-100 dark:hover:bg-white/[0.06] text-xs text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white transition cursor-pointer select-none whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50"
       >
-        <span className="hidden min-[430px]:inline font-medium text-xs text-slate-800 dark:text-zinc-200 whitespace-nowrap">
+        <span className="hidden min-[430px]:inline font-medium text-xs text-zinc-800 dark:text-zinc-200 whitespace-nowrap">
           {currentModel.id.includes("deepseek") ? "DeepSeek-V4.1-Flash" : currentModel.shortName}
         </span>
-        <span className="min-[430px]:hidden font-medium text-xs text-slate-800 dark:text-zinc-200 whitespace-nowrap">
+        <span className="min-[430px]:hidden font-medium text-xs text-zinc-800 dark:text-zinc-200 whitespace-nowrap">
           {currentModel.id === "auto-agent" ? "Auto-Agent" : currentModel.id.includes("deepseek") ? "DeepSeek" : currentModel.shortName}
         </span>
-        <span className="text-slate-600 dark:text-zinc-400 text-xs whitespace-nowrap">
+        <span className="text-zinc-600 dark:text-zinc-400 text-xs whitespace-nowrap">
           {formatEffort(reasoningEffort)}
         </span>
         <ChevronDown
-          className={`w-3.5 h-3.5 text-slate-500 dark:text-zinc-400 transition-transform duration-150 ${
-            isOpen ? "rotate-180 text-slate-900 dark:text-white" : ""
+          className={`w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400 transition-transform duration-150 ${
+            isOpen ? "rotate-180 text-zinc-900 dark:text-white" : ""
           }`}
         />
       </button>
@@ -485,17 +658,17 @@ export default function ModelPickerWithEffort({
                 maxHeight: `${maxSubmenuHeight}px`,
                 zIndex: 9999,
               }}
-              className="liquid-glass-popup rounded-2xl p-2 text-slate-800 dark:text-zinc-200 shadow-2xl border border-slate-200/90 dark:border-white/10 backdrop-blur-2xl animate-liquid-pop origin-bottom flex flex-col overflow-hidden select-none"
+              className="liquid-glass-popup rounded-2xl p-2 text-zinc-800 dark:text-zinc-200 shadow-2xl border border-zinc-200/90 dark:border-white/10 backdrop-blur-2xl animate-liquid-pop origin-bottom flex flex-col overflow-hidden select-none"
             >
               {/* Mobile Segmented Switcher: Model vs Effort */}
-              <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-slate-100 dark:bg-white/[0.06] mb-2 shrink-0">
+              <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-zinc-100 dark:bg-white/[0.06] mb-2 shrink-0">
                 <button
                   type="button"
                   onClick={() => handleRowClick("model")}
                   className={`py-1.5 px-2.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
                     activeSubmenu !== "effort"
-                      ? "bg-white dark:bg-[#1e2028] text-slate-900 dark:text-white shadow-xs"
-                      : "text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
+                      ? "bg-white dark:bg-[#1e2028] text-zinc-900 dark:text-white shadow-xs"
+                      : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
                   }`}
                 >
                   Model AI ({AVAILABLE_MODELS.length})
@@ -505,8 +678,8 @@ export default function ModelPickerWithEffort({
                   onClick={() => handleRowClick("effort")}
                   className={`py-1.5 px-2.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
                     activeSubmenu === "effort"
-                      ? "bg-white dark:bg-[#1e2028] text-slate-900 dark:text-white shadow-xs"
-                      : "text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
+                      ? "bg-white dark:bg-[#1e2028] text-zinc-900 dark:text-white shadow-xs"
+                      : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
                   }`}
                 >
                   Effort: {formatEffort(reasoningEffort)}
@@ -514,90 +687,21 @@ export default function ModelPickerWithEffort({
               </div>
 
               {activeSubmenu === "effort" ? (
-                <div className="space-y-1 px-0.5 overflow-y-auto">
-                  {(["low", "medium", "high"] as ReasoningEffort[]).map((opt) => {
-                    const isSelected = opt === reasoningEffort;
-                    return (
-                      <button
-                        key={opt}
-                        type="button"
-                        onClick={() => handleSelectEffort(opt)}
-                        className={`w-full flex items-center justify-between px-3 py-2 rounded-xl transition cursor-pointer text-left ${
-                          isSelected
-                            ? "bg-slate-900/[0.08] dark:bg-white/[0.14] text-slate-950 dark:text-white font-semibold"
-                            : "text-slate-800 dark:text-zinc-200 hover:bg-slate-900/[0.05] dark:hover:bg-white/[0.06]"
-                        }`}
-                      >
-                        <div className="flex flex-col">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs font-semibold text-slate-900 dark:text-white">
-                              {formatEffort(opt)}
-                            </span>
-                            {opt === "low" && (
-                              <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-mono font-medium">
-                                Paling Irit
-                              </span>
-                            )}
-                            {opt === "high" && (
-                              <span className="text-[11px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-700 dark:text-purple-300 font-mono font-medium">
-                                Maksimal
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-xs text-slate-600 dark:text-zinc-400 leading-tight mt-0.5">
-                            {opt === "high"
-                              ? "Penalaran bertingkat & CoT mendalam"
-                              : opt === "medium"
-                              ? "Keseimbangan kecepatan dan analisis"
-                              : "Respon instan & sangat hemat token"}
-                          </span>
-                        </div>
-                        {isSelected && (
-                          <Check className="w-4 h-4 text-slate-900 dark:text-white shrink-0 ml-2" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
+                <div className="space-y-1 px-0.5 overflow-y-auto">{effortRows}</div>
               ) : (
                 <>
-                  <div className="space-y-0.5 overflow-y-auto pr-1 no-scrollbar flex-1">
-                    {AVAILABLE_MODELS.map((model) => {
-                      const isSelected = model.id === currentModel.id;
-                      const Icon = model.icon;
-                      return (
-                        <button
-                          key={model.id}
-                          type="button"
-                          onClick={() => handleSelectModel(model)}
-                          className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-medium transition cursor-pointer text-left ${
-                            isSelected
-                              ? "bg-slate-900/[0.08] dark:bg-white/[0.14] text-slate-950 dark:text-white font-semibold"
-                              : "text-slate-800 dark:text-zinc-200 hover:bg-slate-900/[0.05] dark:hover:bg-white/[0.06]"
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <Icon className={`w-4 h-4 shrink-0 ${model.iconColor || "text-slate-500"}`} />
-                            <span className="truncate">{model.name}</span>
-                          </div>
-                          {isSelected && (
-                            <Check className="w-3.5 h-3.5 text-slate-900 dark:text-white shrink-0 ml-1.5" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="mt-1.5 pt-1.5 border-t border-slate-200/60 dark:border-white/[0.08] shrink-0">
+                  <div className="space-y-0.5 overflow-y-auto pr-1 no-scrollbar flex-1">{compactModelRows}</div>
+                  <div className="mt-1.5 pt-1.5 border-t border-zinc-200/60 dark:border-white/[0.08] shrink-0">
                     <Link
                       href="/connector"
                       onClick={() => {
                         setIsOpen(false);
                         setIsLockedOpen(false);
                       }}
-                      className="flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-400 hover:text-slate-950 dark:hover:text-white hover:bg-slate-900/[0.05] dark:hover:bg-white/[0.06] transition"
+                      className="flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white hover:bg-zinc-900/[0.05] dark:hover:bg-white/[0.06] transition"
                     >
                       <span>Kelola API Key &amp; Hub...</span>
-                      <ExternalLink className="w-3 h-3 text-slate-500 dark:text-zinc-400" />
+                      <ExternalLink className="w-3 h-3 text-zinc-500 dark:text-zinc-400" />
                     </Link>
                   </div>
                 </>
@@ -627,7 +731,7 @@ export default function ModelPickerWithEffort({
                   width: `${mainWidth}px`,
                   zIndex: 9999,
                 }}
-                className="liquid-glass-popup rounded-2xl p-1.5 text-slate-800 dark:text-zinc-200 shadow-2xl border border-slate-200/90 dark:border-white/10 backdrop-blur-2xl animate-liquid-pop origin-bottom-right select-none"
+                className="liquid-glass-popup rounded-2xl p-1.5 text-zinc-800 dark:text-zinc-200 shadow-2xl border border-zinc-200/90 dark:border-white/10 backdrop-blur-2xl animate-liquid-pop origin-bottom-right select-none"
               >
                 {/* Row 1: Model */}
                 <button
@@ -637,16 +741,16 @@ export default function ModelPickerWithEffort({
                   onClick={() => handleRowClick("model")}
                   className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-[13px] font-medium transition cursor-pointer ${
                     activeSubmenu === "model"
-                      ? "bg-slate-900/[0.08] dark:bg-white/[0.12] text-slate-950 dark:text-white font-semibold"
-                      : "text-slate-700 dark:text-zinc-300 hover:bg-slate-900/[0.05] dark:hover:bg-white/[0.06] hover:text-slate-950 dark:hover:text-white"
+                      ? "bg-zinc-900/[0.08] dark:bg-white/[0.12] text-zinc-950 dark:text-white font-semibold"
+                      : "text-zinc-700 dark:text-zinc-300 hover:bg-zinc-900/[0.05] dark:hover:bg-white/[0.06] hover:text-zinc-950 dark:hover:text-white"
                   }`}
                 >
                   <span>Model</span>
-                  <div className="flex items-center gap-1.5 text-slate-600 dark:text-zinc-400">
+                  <div className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
                     <span className="truncate max-w-[105px] text-xs font-normal text-right">
                       {currentModel.id.includes("deepseek") ? "DeepSeek V4.1" : currentModel.shortName}
                     </span>
-                    <ChevronRight className="w-3.5 h-3.5 text-slate-500 dark:text-zinc-400 shrink-0" />
+                    <ChevronRight className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400 shrink-0" />
                   </div>
                 </button>
 
@@ -658,16 +762,16 @@ export default function ModelPickerWithEffort({
                   onClick={() => handleRowClick("effort")}
                   className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-[13px] font-medium transition cursor-pointer ${
                     activeSubmenu === "effort"
-                      ? "bg-slate-900/[0.08] dark:bg-white/[0.12] text-slate-950 dark:text-white font-semibold"
-                      : "text-slate-700 dark:text-zinc-300 hover:bg-slate-900/[0.05] dark:hover:bg-white/[0.06] hover:text-slate-950 dark:hover:text-white"
+                      ? "bg-zinc-900/[0.08] dark:bg-white/[0.12] text-zinc-950 dark:text-white font-semibold"
+                      : "text-zinc-700 dark:text-zinc-300 hover:bg-zinc-900/[0.05] dark:hover:bg-white/[0.06] hover:text-zinc-950 dark:hover:text-white"
                   }`}
                 >
                   <span>Effort</span>
-                  <div className="flex items-center gap-1.5 text-slate-600 dark:text-zinc-400">
+                  <div className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
                     <span className="text-xs font-normal text-right">
                       {formatEffort(reasoningEffort)}
                     </span>
-                    <ChevronRight className="w-3.5 h-3.5 text-slate-500 dark:text-zinc-400 shrink-0" />
+                    <ChevronRight className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400 shrink-0" />
                   </div>
                 </button>
               </div>
@@ -683,58 +787,33 @@ export default function ModelPickerWithEffort({
                     maxHeight: `${maxSubmenuHeight}px`,
                     zIndex: 9999,
                   }}
-                  className="liquid-glass-popup rounded-2xl p-2 text-slate-800 dark:text-zinc-200 shadow-2xl border border-slate-200/90 dark:border-white/10 backdrop-blur-2xl animate-liquid-pop origin-bottom-right flex flex-col overflow-hidden select-none"
+                  className="liquid-glass-popup rounded-2xl p-2 text-zinc-800 dark:text-zinc-200 shadow-2xl border border-zinc-200/90 dark:border-white/10 backdrop-blur-2xl animate-liquid-pop origin-bottom-right flex flex-col overflow-hidden select-none"
                 >
                   {/* Header */}
-                  <div className="px-2.5 py-1.5 border-b border-slate-200/80 dark:border-white/[0.08] mb-1 flex items-center justify-between shrink-0">
-                    <span className="text-xs font-mono uppercase tracking-wider text-slate-600 dark:text-zinc-400 font-bold">
+                  <div className="px-2.5 py-1.5 border-b border-zinc-200/80 dark:border-white/[0.08] mb-1 flex items-center justify-between shrink-0">
+                    <span className="text-xs font-mono uppercase tracking-wider text-zinc-600 dark:text-zinc-400 font-bold">
                       PILIH MODEL AI
                     </span>
-                    <span className="text-xs text-slate-500 dark:text-zinc-400 font-mono">
+                    <span className="text-xs text-zinc-500 dark:text-zinc-400 font-mono">
                       {AVAILABLE_MODELS.length} Model
                     </span>
                   </div>
 
                   {/* Scrollable Model List */}
-                  <div className="space-y-0.5 overflow-y-auto pr-1 no-scrollbar flex-1">
-                    {AVAILABLE_MODELS.map((model) => {
-                      const isSelected = model.id === currentModel.id;
-                      const Icon = model.icon;
-                      return (
-                        <button
-                          key={model.id}
-                          type="button"
-                          onClick={() => handleSelectModel(model)}
-                          className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-[12.5px] font-medium transition cursor-pointer text-left ${
-                            isSelected
-                              ? "bg-slate-900/[0.08] dark:bg-white/[0.14] text-slate-950 dark:text-white font-semibold"
-                              : "text-slate-800 dark:text-zinc-200 hover:bg-slate-900/[0.05] dark:hover:bg-white/[0.06] hover:text-slate-950 dark:hover:text-white"
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <Icon className={`w-4 h-4 shrink-0 ${model.iconColor || "text-slate-500"}`} />
-                            <span className="truncate">{model.name}</span>
-                          </div>
-                          {isSelected && (
-                            <Check className="w-3.5 h-3.5 text-slate-900 dark:text-white shrink-0 ml-1.5" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <div className="space-y-0.5 overflow-y-auto pr-1 no-scrollbar flex-1">{desktopModelRows}</div>
 
                   {/* Footer */}
-                  <div className="mt-1.5 pt-1.5 border-t border-slate-200/60 dark:border-white/[0.08] shrink-0">
+                  <div className="mt-1.5 pt-1.5 border-t border-zinc-200/60 dark:border-white/[0.08] shrink-0">
                     <Link
                       href="/connector"
                       onClick={() => {
                         setIsOpen(false);
                         setIsLockedOpen(false);
                       }}
-                      className="flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-400 hover:text-slate-950 dark:hover:text-white hover:bg-slate-900/[0.05] dark:hover:bg-white/[0.06] transition"
+                      className="flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white hover:bg-zinc-900/[0.05] dark:hover:bg-white/[0.06] transition"
                     >
                       <span>Kelola API Key &amp; Hub...</span>
-                      <ExternalLink className="w-3 h-3 text-slate-500 dark:text-zinc-400" />
+                      <ExternalLink className="w-3 h-3 text-zinc-500 dark:text-zinc-400" />
                     </Link>
                   </div>
                 </div>
@@ -750,10 +829,10 @@ export default function ModelPickerWithEffort({
                     width: `${submenuWidth}px`,
                     zIndex: 9999,
                   }}
-                  className="liquid-glass-popup rounded-2xl p-2 text-slate-800 dark:text-zinc-200 shadow-2xl border border-slate-200/90 dark:border-white/10 backdrop-blur-2xl animate-liquid-pop origin-bottom-right select-none"
+                  className="liquid-glass-popup rounded-2xl p-2 text-zinc-800 dark:text-zinc-200 shadow-2xl border border-zinc-200/90 dark:border-white/10 backdrop-blur-2xl animate-liquid-pop origin-bottom-right select-none"
                 >
-                  <div className="px-2.5 py-1.5 border-b border-slate-200/80 dark:border-white/[0.08] mb-1 flex items-center justify-between">
-                    <span className="text-xs font-mono uppercase tracking-wider text-slate-600 dark:text-zinc-400 font-bold">
+                  <div className="px-2.5 py-1.5 border-b border-zinc-200/80 dark:border-white/[0.08] mb-1 flex items-center justify-between">
+                    <span className="text-xs font-mono uppercase tracking-wider text-zinc-600 dark:text-zinc-400 font-bold">
                       REASONING EFFORT
                     </span>
                     <span className="text-[11px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 font-mono font-semibold">
@@ -761,51 +840,7 @@ export default function ModelPickerWithEffort({
                     </span>
                   </div>
 
-                  <div className="space-y-1 px-0.5">
-                    {(["low", "medium", "high"] as ReasoningEffort[]).map((opt) => {
-                      const isSelected = opt === reasoningEffort;
-                      return (
-                        <button
-                          key={opt}
-                          type="button"
-                          onClick={() => handleSelectEffort(opt)}
-                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl transition cursor-pointer text-left ${
-                            isSelected
-                              ? "bg-slate-900/[0.08] dark:bg-white/[0.14] text-slate-950 dark:text-white font-semibold"
-                              : "text-slate-800 dark:text-zinc-200 hover:bg-slate-900/[0.05] dark:hover:bg-white/[0.06] hover:text-slate-950 dark:hover:text-white"
-                          }`}
-                        >
-                          <div className="flex flex-col">
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-xs font-semibold text-slate-900 dark:text-white">
-                                {formatEffort(opt)}
-                              </span>
-                              {opt === "low" && (
-                                <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-mono font-medium">
-                                  Paling Irit
-                                </span>
-                              )}
-                              {opt === "high" && (
-                                <span className="text-[11px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-700 dark:text-purple-300 font-mono font-medium">
-                                  Maksimal
-                                </span>
-                              )}
-                            </div>
-                            <span className="text-xs text-slate-600 dark:text-zinc-400 leading-tight mt-0.5">
-                              {opt === "high"
-                                ? "Penalaran bertingkat & CoT mendalam"
-                                : opt === "medium"
-                                ? "Keseimbangan kecepatan dan analisis"
-                                : "Respon instan & sangat hemat token"}
-                            </span>
-                          </div>
-                          {isSelected && (
-                            <Check className="w-4 h-4 text-slate-900 dark:text-white shrink-0 ml-2" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <div className="space-y-1 px-0.5">{desktopEffortRows}</div>
                 </div>
               )}
             </>
@@ -816,3 +851,17 @@ export default function ModelPickerWithEffort({
     </div>
   );
 }
+
+// Hanya berubah-tampilan yang memicu render ulang. Identitas callback parent
+// sengaja diabaikan: handler internal membaca callback terbaru lewat ref,
+// sehingga mengabaikannya tidak membuat perilaku menjadi basi.
+function areModelPickerPropsEqual(prev: ModelPickerProps, next: ModelPickerProps): boolean {
+  return (
+    prev.selectedModelId === next.selectedModelId &&
+    prev.reasoningEffort === next.reasoningEffort &&
+    prev.variant === next.variant &&
+    prev.dropUp === next.dropUp
+  );
+}
+
+export default React.memo(ModelPickerWithEffort, areModelPickerPropsEqual);

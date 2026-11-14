@@ -11,6 +11,10 @@ const connectSrc = isDev
 
 const nextConfig = {
   output: "standalone",
+  images: {
+    // Dipakai demo `components/ui/container-scroll-animation` (foto Unsplash).
+    remotePatterns: [{ protocol: "https", hostname: "images.unsplash.com" }],
+  },
   experimental: {
     optimizePackageImports: ["framer-motion", "lucide-react"],
   },

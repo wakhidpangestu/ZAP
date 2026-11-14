@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { writeJsonFileAtomic } from "@/lib/atomic-file";
 
 export interface UserSecurityRecord {
   email: string;
@@ -68,7 +69,12 @@ export function loadRegistryFromFile(): Record<string, UserSecurityRecord> {
   if (filePath && fs.existsSync(filePath)) {
     try {
       const raw = fs.readFileSync(filePath, "utf-8");
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      // Berkas kosong/rusak/null tidak boleh membuat seluruh operasi 500.
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, UserSecurityRecord>;
+      }
+      return {};
     } catch {
       return {};
     }
@@ -80,7 +86,8 @@ function saveRegistryToFile(data: Record<string, UserSecurityRecord>) {
   const filePath = getSecurityFilePath();
   if (filePath) {
     try {
-      fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+      // Atomik: register sanksi tidak boleh korup/hilang bila proses terhenti.
+      writeJsonFileAtomic(filePath, data);
     } catch (e) {
       console.warn("Gagal menyimpan security registry file:", e);
     }
@@ -173,7 +180,9 @@ function loadUsedTokenHashes(): Record<string, number> {
   if (filePath && fs.existsSync(filePath)) {
     try {
       const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      if (parsed && typeof parsed === "object") return parsed;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, number>;
+      }
     } catch {
       return {};
     }
@@ -185,7 +194,7 @@ function saveUsedTokenHashes(data: Record<string, number>) {
   const filePath = getUsedTokensFilePath();
   if (!filePath) return;
   try {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+    writeJsonFileAtomic(filePath, data);
   } catch (e) {
     console.warn("Gagal menyimpan daftar token pemulihan terpakai:", e);
   }

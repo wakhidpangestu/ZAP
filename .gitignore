@@ -46,9 +46,14 @@ Thumbs.db
 .zap_vault/
 .data/
 *.db
+*.db-shm
+*.db-wal
 
 # Local Trash & Archive (Non-uploadable / Staged Files)
 /trash/
+trash/
+shots/
+.playwright-mcp/
 Surat_Pernyataan_Preview.png
 
 # Agent local skills & codex

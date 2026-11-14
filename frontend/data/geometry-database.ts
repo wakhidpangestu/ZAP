@@ -936,11 +936,12 @@ export function resolveGeometricIntent(
   history?: Array<{ rawText?: string; replyText?: string; role?: string; content?: string }>
 ): ResolvedGeometricResult | null {
   const lower = query.toLowerCase().trim();
-  if (!lower) return null;
+  if (!lower || lower.length > 500) return null;
 
-  // 1. Deteksi Token Dimensi Eksplisit
-  const has2DToken = /\b(2d|2-d|dua dimensi|bangun datar|bidang datar|jaring-jaring|jaring jaring|net|alas|penampang|proyeksi)\b/i.test(lower);
-  const has3DToken = /\b(3d|3-d|tiga dimensi|bangun ruang|ruang|solid|volume|irisan|penampang 3d)\b/i.test(lower);
+  // 1. Deteksi Token Dimensi Eksplisit & Jaring-Jaring (Ketat tanpa kata umum ambigu seperti "proyeksi", "alas", atau "net")
+  const has2DToken = /\b(2d|2-d|dua dimensi|bangun datar|bidang datar|jaring-jaring|jaring jaring|bentangan 2d)\b/i.test(lower);
+  const hasNetToken = /\b(jaring-jaring|jaring jaring|bentangan)\b/i.test(lower);
+  const has3DToken = /\b(3d|3-d|tiga dimensi|bangun ruang|ruang 3d|solid 3d|penampang 3d)\b/i.test(lower);
 
   // Kata kerja visualisasi
   const hasVisualCommand = /\b(buatkan|buatin|buat|bikinin|bikin|tampilkan|gambarkan|gambar|lukis|lukiskan|visualisasikan|render|modelkan|lihat|buka|simulasikan|create|generate|show|plot|sketsa)\b/i.test(lower);
@@ -956,9 +957,12 @@ export function resolveGeometricIntent(
   const polyT = labeled.t ?? pool[1] ?? 10;
 
   // 2. KASUS A: PENGGUNA MEMINTA BENTUK 2D (ATAU JARING-JARING DARI BANGUN RUANG)
+  // Jaring-jaring 2D hanya aktif jika pengguna memang meminta jaring-jaring atau memberi perintah visualisasi 2D spesifik
+  const isNetRequest = hasNetToken || (has2DToken && (hasVisualCommand || /\b(2d|dua dimensi)\b/i.test(lower)));
+
   if (has2DToken) {
     // A.1 Cek apakah meminta jaring-jaring / representasi 2D dari bangun ruang
-    if (lower.includes("prisma") || lower.includes("prism")) {
+    if (isNetRequest && (lower.includes("prisma") || lower.includes("prism"))) {
       const entity = GEOMETRY_DATABASE.nets_2d.find((n) => n.id === "jaring_prisma")!;
       const s = nums[0] || 8;
       const t = nums[1] || 10;
@@ -983,7 +987,7 @@ export function resolveGeometricIntent(
       };
     }
 
-    if (lower.includes("kubus") || lower.includes("cube")) {
+    if (isNetRequest && (lower.includes("kubus") || lower.includes("cube"))) {
       const entity = GEOMETRY_DATABASE.nets_2d.find((n) => n.id === "jaring_kubus")!;
       const s = nums[0] || 10;
       return {
@@ -1005,7 +1009,7 @@ export function resolveGeometricIntent(
       };
     }
 
-    if (lower.includes("limas") || lower.includes("piramida") || lower.includes("piramid") || lower.includes("pyramid")) {
+    if (isNetRequest && (lower.includes("limas") || lower.includes("piramida") || lower.includes("piramid") || lower.includes("pyramid"))) {
       if (sides !== null && sides !== 4) {
         return clarifyResult(`Jaring-jaring 2D untuk **Limas ${polyName(sides)}** belum tersedia, jadi papan tidak saya buka dengan bangun yang salah.\n\nYang bisa saya tampilkan sekarang: versi 3D-nya. Coba ketik: \`buatin limas ${polyName(sides).toLowerCase()} 3d\``, "2D");
       }
@@ -1032,7 +1036,7 @@ export function resolveGeometricIntent(
       };
     }
 
-    if (lower.includes("balok") || lower.includes("cuboid")) {
+    if (isNetRequest && (lower.includes("balok") || lower.includes("cuboid"))) {
       const entity = GEOMETRY_DATABASE.nets_2d.find((n) => n.id === "jaring_balok")!;
       const p = nums[0] || 10;
       const l = nums[1] || 6;
@@ -1277,15 +1281,16 @@ export function resolveGeometricIntent(
   }
 
   // 3. KASUS B: PENGGUNA MEMINTA BENTUK 3D (ATAU BENTUK SECARA ALAMI 3D TANPA KATA 2D)
-  const isSegiEnam3D = /(segienam|segi enam|segi-6|segi 6|hexagon|heksagon)/i.test(lower) && !has2DToken;
-  const isSegiLima3D = /(segilima|segi lima|segi-5|segi 5|pentagon)/i.test(lower) && !has2DToken;
-  const isPrisma3D = (lower.includes("prisma") || lower.includes("prism")) && !has2DToken;
-  const isLimas3D = (lower.includes("limas") || lower.includes("piramida") || lower.includes("piramid") || lower.includes("pyramid")) && !has2DToken;
-  const isKubus3D = (lower.includes("kubus") || lower.includes("cube")) && !has2DToken;
-  const isBalok3D = (lower.includes("balok") || lower.includes("cuboid") || lower.includes("persegi panjang 3d")) && !has2DToken;
-  const isTabung3D = (lower.includes("tabung") || lower.includes("cylinder") || lower.includes("silinder")) && !has2DToken;
-  const isBola3D = (lower.includes("bola") || lower.includes("sphere")) && !has2DToken;
-  const isKerucut3D = (lower.includes("kerucut") || lower.includes("cone")) && !has2DToken;
+  const has3DContext = has3DToken || hasVisualCommand || /\b(sisi|rusuk|panjang|tinggi|jari-jari|jari|dimensi|model|gambar|kanvas|smartboard|bangun)\b/i.test(lower);
+  const isSegiEnam3D = has3DContext && /(segienam|segi enam|segi-6|segi 6|hexagon|heksagon)/i.test(lower) && !has2DToken;
+  const isSegiLima3D = has3DContext && /(segilima|segi lima|segi-5|segi 5|pentagon)/i.test(lower) && !has2DToken;
+  const isPrisma3D = has3DContext && (lower.includes("prisma") || lower.includes("prism")) && !has2DToken;
+  const isLimas3D = has3DContext && (lower.includes("limas") || lower.includes("piramida") || lower.includes("piramid") || lower.includes("pyramid")) && !has2DToken;
+  const isKubus3D = has3DContext && (lower.includes("kubus") || lower.includes("cube")) && !has2DToken;
+  const isBalok3D = has3DContext && (lower.includes("balok") || lower.includes("cuboid") || lower.includes("persegi panjang 3d")) && !has2DToken;
+  const isTabung3D = has3DContext && (lower.includes("tabung") || lower.includes("cylinder") || lower.includes("silinder")) && !has2DToken;
+  const isBola3D = has3DContext && (lower.includes("bola") || lower.includes("sphere")) && !has2DToken;
+  const isKerucut3D = has3DContext && (lower.includes("kerucut") || lower.includes("cone")) && !has2DToken;
 
   // Dispatch keluarga poligon: LIMAS didahulukan dari PRISMA (dulu "piramida segi enam"
   // selalu kalah oleh shortcut segienam dan berubah menjadi prisma).

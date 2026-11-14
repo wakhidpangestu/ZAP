@@ -67,7 +67,9 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ error: "Parameter tidak lengkap" }, { status: 400 });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    // Jangan kembalikan isi error internal (path, konfigurasi env) ke klien.
+    console.error("Admin security GET error:", err);
+    return NextResponse.json({ error: "Gagal memproses permintaan keamanan." }, { status: 500 });
   }
 }
 
@@ -153,6 +155,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ error: "Aksi tidak dikenal" }, { status: 400 });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    console.error("Admin security POST error:", err);
+    return NextResponse.json({ error: "Gagal memproses tindakan keamanan." }, { status: 500 });
   }
 }

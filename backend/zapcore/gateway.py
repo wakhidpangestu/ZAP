@@ -76,7 +76,14 @@ class GatewayError(Exception):
 
 
 def _default_http_post(url: str, headers: dict, payload: dict) -> tuple[int, dict]:
-    resp = httpx.post(url, headers=headers, json=payload, timeout=60.0)
+    # Galat jaringan/timeout tidak boleh lolos sebagai 500 mentah: panggilan
+    # provider berjalan di jalur permintaan /chat dan /connectors/verify.
+    try:
+        resp = httpx.post(url, headers=headers, json=payload, timeout=60.0)
+    except httpx.TimeoutException:
+        return 504, {"error": {"message": "Penyedia AI tidak merespons dalam 60 detik"}}
+    except httpx.HTTPError as err:
+        return -1, {"error": {"message": f"Gagal menghubungi penyedia AI: {err}"}}
     try:
         return resp.status_code, resp.json()
     except Exception:
@@ -217,13 +224,14 @@ class Gateway:
             text = self._call_anthropic(cred, chosen_model, messages, system)
         else:
             text = self._call_openai_kind(cred, provider, chosen_model, messages, system)
-        if guardrail_solution:
-            # Pagar Zero Answer Policy milik CFL: satu-satunya penyaring
-            # keluaran yang diakui proyek ini.
-            from cfl import RobustZeroAnswerGuardrail
+        # Pagar Zero Answer Policy milik CFL: satu-satunya penyaring keluaran
+        # yang diakui proyek ini. Selalu dijalankan - termasuk ketika solusi
+        # akhir tidak diketahui (guardrail_solution=None) - agar deklarasi
+        # seperti "jawaban akhirnya adalah x = 4" tetap disaring.
+        from cfl import RobustZeroAnswerGuardrail
 
-            text = RobustZeroAnswerGuardrail.sanitize(
-                text, final_solution=guardrail_solution)
+        text = RobustZeroAnswerGuardrail.sanitize(
+            text, final_solution=guardrail_solution)
         if cred.get("connector_id"):
             self.store.touch_connector(cred["connector_id"])
         return {

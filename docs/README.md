@@ -22,6 +22,7 @@ Koleksi dokumentasi teknis, arsitektur sistem, algoritma penalaran simbolik, des
 | [**DATA_AND_LEARNING_POLICY.md**](DATA_AND_LEARNING_POLICY.md) | Kebijakan kurasi basis pengetahuan mandiri (*self-learning flywheel*), filter PII, sanitasi NIK/Email, dan aturan persetujuan pengguna (*explicit opt-in consent*). |
 | [**PRIVACY_POLICY.md**](PRIVACY_POLICY.md) | Kebijakan privasi resmi untuk pengguna platform ZAP, retensi data percakapan, hak ekspor (*GDPR-style export*), dan penghapusan data mandiri. |
 | [**TERMS_OF_SERVICE.md**](TERMS_OF_SERVICE.md) | Syarat dan ketentuan penggunaan platform edukasi ZAP, standar integritas akademik, dan kebijakan etika anti-kecurangan. |
+| [**DEPLOYMENT_GUIDE.md**](DEPLOYMENT_GUIDE.md) | Panduan deployment produksi, konfigurasi container Docker, reverse proxy, SSL, dan manajemen environment. |
 
 ---
 

@@ -2,17 +2,14 @@
 
 import React, { useState, useEffect } from "react";
 import {
-  Share2,
   Copy,
   Check,
   X,
   ExternalLink,
   Loader2,
-  ShieldCheck,
-  MessageSquare,
   Lock,
   Globe,
-  AlertTriangle,
+  User,
 } from "lucide-react";
 import { type ZAPUser } from "@/components/GoogleAuthButton";
 
@@ -45,6 +42,19 @@ export default function ShareModal({
   const [shareUrl, setShareUrl] = useState<string>("");
   const [copied, setCopied] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Escape menutup dialog dari papan tombol.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [isOpen, onClose]);
 
   useEffect(() => {
     if (!isOpen || !conversation) return;
@@ -116,7 +126,7 @@ export default function ShareModal({
           conversationId: conversation.id,
           title: conversation.title,
           messages: conversation.messages,
-          authorName: currentUser?.name || "Pengguna ZAP",
+          authorName: currentUser?.name || "Pengguna ChatZAP",
           authorEmail: currentUser?.email,
           includeAuthor,
           isPublic: nextState,
@@ -128,10 +138,10 @@ export default function ShareModal({
       if (json.success) {
         setIsPublic(nextState);
       } else {
-        throw new Error(json.error || "Gagal memperbarui status publik tautan.");
+        throw new Error(json.error || "Gagal memperbarui status tautan.");
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Gagal mengubah status publik tautan.";
+      const msg = err instanceof Error ? err.message : "Gagal mengubah status tautan.";
       setError(msg);
     } finally {
       setIsGenerating(false);
@@ -143,10 +153,10 @@ export default function ShareModal({
     try {
       await navigator.clipboard.writeText(shareUrl);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
+      setTimeout(() => setCopied(false), 2200);
     } catch {
       setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
+      setTimeout(() => setCopied(false), 2200);
     }
   };
 
@@ -157,195 +167,183 @@ export default function ShareModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-150"
+      onClick={onClose}
+    >
       <div
-        className="w-full max-w-lg rounded-3xl liquid-glass-popup p-6 text-slate-900 dark:text-zinc-100 flex flex-col gap-5 relative animate-liquid-pop"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="share-modal-title"
+        className="w-full max-w-[420px] rounded-2xl bg-white dark:bg-[#121318] border border-zinc-200/90 dark:border-white/[0.08] shadow-[0_20px_50px_-12px_rgba(15,23,42,0.18)] dark:shadow-[0_24px_60px_-12px_rgba(0,0,0,0.75)] p-5 text-zinc-900 dark:text-zinc-100 flex flex-col gap-4 relative animate-liquid-pop"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-white/[0.08] flex items-center justify-center text-slate-800 dark:text-white border border-slate-200 dark:border-white/[0.08] shadow-sm">
-              <Share2 className="w-4 h-4" />
-            </div>
-            <div>
-              <h2 className="text-base font-bold tracking-tight text-slate-900 dark:text-white">
-                Bagikan Tautan ke Percakapan
-              </h2>
-              <p className="text-xs text-slate-500 dark:text-zinc-400">
-                Kontrol akses publik dan privasi obrolan Anda
-              </p>
-            </div>
+        {/* Clean Minimalist Header */}
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <h2 id="share-modal-title" className="text-sm font-bold tracking-tight text-zinc-900 dark:text-white">
+              Bagikan Percakapan
+            </h2>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate mt-0.5">
+              {conversation.title || "Percakapan ChatZAP"} • {conversation.messages.length} pesan
+            </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Tutup modal bagikan"
-            title="Tutup"
-            className="p-1.5 min-w-[28px] min-h-[28px] flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 dark:text-zinc-400 dark:hover:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+            aria-label="Tutup"
+            className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-white/[0.06] transition cursor-pointer shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Snapshot Summary Box */}
-        <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-900/80 border border-slate-200 dark:border-zinc-800/80 flex items-start gap-3">
-          <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-white/[0.06] border border-slate-200 dark:border-white/[0.08] flex items-center justify-center text-slate-700 dark:text-zinc-300 shrink-0 mt-0.5">
-            <MessageSquare className="w-4 h-4" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-semibold text-slate-900 dark:text-zinc-100 truncate">
-              {conversation.title || "Percakapan ChatZAP"}
-            </div>
-            <div className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5 flex items-center gap-2">
-              <span>{conversation.messages.length} pesan</span>
-              <span>•</span>
-              <span>
-                {includeAuthor && currentUser?.name
-                  ? `Dibagikan oleh ${currentUser.name}`
-                  : "Dibagikan secara Anonim"}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Security & Public Access Control Toggle */}
-        <div className="p-3.5 rounded-xl bg-slate-100/70 dark:bg-zinc-900/60 border border-slate-200 dark:border-zinc-800 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-slate-200/80 dark:bg-white/[0.08] border border-slate-300 dark:border-white/[0.1] flex items-center justify-center text-slate-700 dark:text-zinc-300 shrink-0">
-              {isPublic ? <Globe className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
-            </div>
-            <div>
-              <div className="text-xs font-semibold text-slate-900 dark:text-zinc-100 flex items-center gap-1.5">
-                <span>{isPublic ? "Akses Publik Aktif" : "Akses Publik Dinonaktifkan (Privat)"}</span>
-                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-medium bg-slate-200 dark:bg-white/[0.1] text-slate-800 dark:text-zinc-200">
-                  {isPublic ? "Bisa Dilihat" : "Terkunci"}
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
-                {isPublic
-                  ? "Siapa pun yang memiliki tautan dapat membaca percakapan ini."
-                  : "Hanya Anda yang dapat melihat percakapan ini di akun Anda."}
-              </p>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            disabled={isGenerating}
-            onClick={() => handleTogglePublic(!isPublic)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0 cursor-pointer ${
-              isPublic
-                ? "bg-slate-200 hover:bg-slate-300 dark:bg-white/[0.1] dark:hover:bg-white/[0.16] text-slate-800 dark:text-zinc-200 border border-slate-300 dark:border-white/[0.1]"
-                : "bg-slate-900 hover:bg-slate-800 text-white dark:bg-white dark:text-slate-900 dark:hover:bg-zinc-200 shadow-sm"
-            }`}
-          >
-            {isPublic ? "Kunci / Matikan" : "Aktifkan Publik"}
-          </button>
-        </div>
-
-        {/* Options */}
-        <div className="flex items-center justify-between text-xs px-1">
-          <label className="flex items-center gap-2 cursor-pointer select-none text-slate-700 dark:text-zinc-300">
-            <input
-              type="checkbox"
-              checked={includeAuthor}
-              onChange={(e) => setIncludeAuthor(e.target.checked)}
-              className="w-4 h-4 rounded border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-white focus:ring-slate-500 focus:ring-offset-0 bg-white dark:bg-zinc-800 cursor-pointer"
-            />
-            <span>Sertakan nama akun saya ({currentUser?.name || "Pengguna"})</span>
-          </label>
-
-          <span className="inline-flex items-center gap-1 text-[11px] text-slate-600 dark:text-zinc-400 font-medium">
-            <ShieldCheck className="w-3.5 h-3.5 text-slate-500 dark:text-zinc-400" />
-            API Key & Sesi Privat Aman
-          </span>
-        </div>
-
-        {/* URL Input Box */}
+        {/* Integrated Link + Copy Bar */}
         <div className="space-y-1.5">
-          <label className="text-[11px] font-medium text-slate-500 dark:text-zinc-400 flex items-center justify-between">
-            <span>Tautan Percakapan Publik</span>
-            {!isPublic && (
-              <span className="text-slate-500 dark:text-zinc-400 flex items-center gap-1">
-                <AlertTriangle className="w-3 h-3" />
-                Tautan saat ini tidak aktif
-              </span>
-            )}
-          </label>
-          <div className="flex items-center gap-2">
-            <div className="flex-1 relative flex items-center">
-              <input
-                type="text"
-                readOnly
-                aria-label="Tautan Percakapan Publik"
-                value={
-                  isGenerating
-                    ? "Memproses..."
+          <div className="flex items-center gap-1.5 p-1.5 pl-3 rounded-xl bg-zinc-50 dark:bg-white/[0.04] border border-zinc-200/90 dark:border-white/[0.08]">
+            <input
+              type="text"
+              readOnly
+              aria-label="Tautan Percakapan"
+              value={
+                isGenerating
+                  ? "Menyiapkan tautan..."
+                  : isPublic
+                  ? shareUrl
+                  : "Tautan dikunci (Privat)"
+              }
+              className={`w-full bg-transparent text-xs font-mono select-all outline-none truncate ${
+                isPublic
+                  ? "text-zinc-700 dark:text-zinc-200"
+                  : "text-zinc-400 dark:text-zinc-500"
+              }`}
+            />
+            {isGenerating ? (
+              <div className="px-3 py-2">
+                <Loader2 className="w-3.5 h-3.5 text-zinc-400 animate-spin" />
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleCopy}
+                disabled={!shareUrl || !isPublic}
+                className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                  copied
+                    ? "bg-emerald-600 text-white"
                     : isPublic
-                    ? shareUrl
-                    : "(Tautan dinonaktifkan oleh pemilik)"
-                }
-                className={`w-full px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-zinc-900 border text-xs font-mono select-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50 ${
-                  isPublic
-                    ? "border-slate-300 dark:border-zinc-700/80 text-slate-800 dark:text-zinc-200"
-                    : "border-slate-300 dark:border-zinc-700/80 text-slate-500 dark:text-zinc-400 line-through"
+                    ? "bg-[#09090b] hover:bg-zinc-800 text-white dark:bg-white dark:text-[#09090b] dark:hover:bg-zinc-200"
+                    : "bg-zinc-200 dark:bg-white/[0.06] text-zinc-400 dark:text-zinc-500 cursor-not-allowed"
                 }`}
-              />
-              {isGenerating && (
-                <div className="absolute right-3">
-                  <Loader2 className="w-4 h-4 text-slate-500 animate-spin" />
-                </div>
-              )}
-            </div>
+              >
+                {copied ? (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Tersalin</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Salin</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+          {error && (
+          <p role="alert" className="text-[11px] text-rose-500 px-1">
+            {error}
+          </p>
+        )}
+        </div>
 
+        {/* Clean Minimalist Toggle Controls */}
+        <div className="divide-y divide-zinc-100 dark:divide-white/[0.06] border-y border-zinc-100 dark:border-white/[0.06]">
+          {/* Public Access Switch */}
+          <div className="py-2.5 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-7 h-7 rounded-lg bg-zinc-100 dark:bg-white/[0.05] flex items-center justify-center text-zinc-600 dark:text-zinc-300 shrink-0">
+                {isPublic ? <Globe className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-zinc-900 dark:text-zinc-100">
+                  Akses tautan publik
+                </div>
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
+                  {isPublic ? "Siapa pun dengan tautan dapat membaca" : "Hanya Anda yang dapat mengakses"}
+                </div>
+              </div>
+            </div>
             <button
               type="button"
-              onClick={handleCopy}
-              disabled={isGenerating || !shareUrl || !isPublic}
-              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 shadow-sm cursor-pointer ${
-                copied
-                  ? "bg-slate-800 text-white dark:bg-white dark:text-slate-900"
-                  : isPublic
-                  ? "bg-slate-900 hover:bg-slate-800 text-white dark:bg-white dark:text-slate-900 dark:hover:bg-zinc-200 disabled:opacity-50"
-                  : "bg-zinc-200 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed"
+              role="switch"
+              aria-label="Akses tautan publik"
+              aria-checked={isPublic}
+              disabled={isGenerating}
+              onClick={() => handleTogglePublic(!isPublic)}
+              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c4956a] ${
+                isPublic ? "bg-[#09090b] dark:bg-white" : "bg-zinc-200 dark:bg-white/[0.12]"
               }`}
             >
-              {copied ? (
-                <>
-                  <Check className="w-3.5 h-3.5" />
-                  Disalin!
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3.5 h-3.5" />
-                  Salin Tautan
-                </>
-              )}
+              <span
+                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full shadow-xs ring-0 transition duration-200 ease-in-out ${
+                  isPublic
+                    ? "translate-x-4 bg-white dark:bg-[#09090b]"
+                    : "translate-x-0 bg-white dark:bg-zinc-400"
+                }`}
+              />
             </button>
           </div>
-          {error && <p className="text-[11px] text-rose-500 mt-1">{error}</p>}
+
+          {/* Author Attribution Switch */}
+          <div className="py-2.5 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-7 h-7 rounded-lg bg-zinc-100 dark:bg-white/[0.05] flex items-center justify-center text-zinc-600 dark:text-zinc-300 shrink-0">
+                <User className="w-3.5 h-3.5" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-zinc-900 dark:text-zinc-100">
+                  Tampilkan nama saya
+                </div>
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
+                  {includeAuthor ? currentUser?.name || "Pengguna ChatZAP" : "Dibagikan secara anonim"}
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-label="Cantumkan nama penulis"
+              aria-checked={includeAuthor}
+              onClick={() => setIncludeAuthor(!includeAuthor)}
+              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c4956a] ${
+                includeAuthor ? "bg-[#09090b] dark:bg-white" : "bg-zinc-200 dark:bg-white/[0.12]"
+              }`}
+            >
+              <span
+                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full shadow-xs ring-0 transition duration-200 ease-in-out ${
+                  includeAuthor
+                    ? "translate-x-4 bg-white dark:bg-[#09090b]"
+                    : "translate-x-0 bg-white dark:bg-zinc-400"
+                }`}
+              />
+            </button>
+          </div>
         </div>
 
-        {/* Footer Actions */}
-        <div className="pt-2 border-t border-slate-200 dark:border-zinc-800/80 flex items-center justify-between">
-          <button
-            type="button"
-            onClick={handleOpenExternal}
-            disabled={!shareUrl || isGenerating || !isPublic}
-            className="text-xs text-slate-700 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white font-medium inline-flex items-center gap-1.5 disabled:opacity-40 cursor-pointer"
-          >
-            <span>Buka pratinjau publik</span>
-            <ExternalLink className="w-3.5 h-3.5" />
-          </button>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 rounded-xl text-xs font-medium text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer"
-          >
-            Selesai
-          </button>
+        {/* Minimal Footer */}
+        <div className="flex items-center justify-between text-[11px] text-zinc-400 dark:text-zinc-500">
+          <span>API key &amp; sesi privat tetap aman</span>
+          {isPublic && shareUrl && (
+            <button
+              type="button"
+              onClick={handleOpenExternal}
+              disabled={isGenerating}
+              className="text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white font-medium inline-flex items-center gap-1 transition cursor-pointer"
+            >
+              <span>Pratinjau</span>
+              <ExternalLink className="w-3 h-3" />
+            </button>
+          )}
         </div>
       </div>
     </div>

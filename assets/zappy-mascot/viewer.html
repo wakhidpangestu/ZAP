@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<title>ZAPPY · 3D viewer</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #EFE8DE;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #app { position: fixed; inset: 0; }
+  #hud { position: fixed; left: 18px; top: 16px; display: flex; flex-direction: column; gap: 9px; max-width: 340px; }
+  #hud h1 { margin: 0; font-size: 15px; letter-spacing: .08em; text-transform: uppercase; color: #3A2A1E; }
+  #hud p { margin: 0; font-size: 12px; line-height: 1.5; color: #7A6656; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .row span { font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: #9A8674; width: 46px; }
+  button { font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 999px; cursor: pointer;
+    border: 1px solid rgba(58,42,30,.18); background: rgba(255,255,255,.75); color: #3A2A1E; }
+  button.on { background: #EE8B3C; border-color: #EE8B3C; color: #fff; }
+  #meta { position: fixed; right: 18px; bottom: 14px; font-size: 11px; color: #8A7767; text-align: right; line-height: 1.6; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app"></div>
+<div id="hud">
+  <h1>ZAPPY</h1>
+  <p>Maskot 3D ZAP · drag untuk memutar, scroll untuk zoom.</p>
+  <div class="row"><span>Badan</span><div class="row" id="bodyRow"></div></div>
+  <div class="row"><span>Wajah</span><div class="row" id="headRow"></div></div>
+</div>
+<div id="meta">procedural mesh · Y-up · satuan meter</div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const SETS = {
+  body: ['idle', 'wave', 'cheer', 'run', 'sit', 'sleep', 'think', 'wink'],
+  head: ['neutral', 'happy', 'laugh', 'wink', 'sleepy', 'surprised', 'thinking', 'shy']
+};
+const VIEW = { body: { target: [0, 0.5, 0], dist: 2.6, lift: 0.42 }, head: { target: [0, 0.3, 0], dist: 1.9, lift: 0.24 } };
+const fileFor = (set, p) => (set === 'head' ? 'out/zapy_head_' + p + '.glb' : 'out/zapy_' + p + '.glb');
+
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.06;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#EFE8DE');
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.05).texture;
+scene.environmentIntensity = 0.85;
+
+const camera = new THREE.PerspectiveCamera(32, innerWidth / innerHeight, 0.05, 100);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.minDistance = 0.8;
+controls.maxDistance = 6;
+
+const key = new THREE.DirectionalLight(0xfff2e0, 2.6);
+key.position.set(2.2, 4.2, 2.6);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+Object.assign(key.shadow.camera, { near: 0.5, far: 14, left: -1.6, right: 1.6, top: 1.6, bottom: -1.6 });
+key.shadow.bias = -0.0009;
+scene.add(key, key.target);
+
+const fill = new THREE.DirectionalLight(0xdfe8ff, 0.55);
+fill.position.set(-3.2, 2.0, 1.8);
+scene.add(fill);
+
+const rim = new THREE.DirectionalLight(0xffffff, 1.2);
+rim.position.set(-0.6, 2.4, -3.2);
+scene.add(rim);
+
+const ground = new THREE.Mesh(new THREE.CircleGeometry(6, 64),
+  new THREE.ShadowMaterial({ color: 0x5a4433, opacity: 0.16 }));
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const loader = new GLTFLoader();
+const cache = {};
+let current = null;
+
+function placeCamera(set) {
+  const v = VIEW[set];
+  controls.target.set(...v.target);
+  camera.position.set(v.dist * 0.55, v.target[1] + v.dist * v.lift, v.dist * 0.74);
+  controls.update();
+}
+
+async function show(set, pose) {
+  for (const b of document.querySelectorAll('button')) {
+    b.classList.toggle('on', b.dataset.set === set && b.dataset.pose === pose);
+  }
+  const key_ = set + '/' + pose;
+  if (!cache[key_]) cache[key_] = await loader.loadAsync(fileFor(set, pose));
+  if (current) scene.remove(current);
+  current = cache[key_].scene;
+  current.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  scene.add(current);
+  placeCamera(set);
+  document.getElementById('meta').textContent =
+    set + ' / ' + pose + ' · procedural mesh · Y-up · satuan meter';
+}
+
+for (const [set, poses] of Object.entries(SETS)) {
+  const row = document.getElementById(set === 'body' ? 'bodyRow' : 'headRow');
+  for (const p of poses) {
+    const b = document.createElement('button');
+    b.textContent = p;
+    b.dataset.set = set;
+    b.dataset.pose = p;
+    b.onclick = () => show(set, p);
+    row.appendChild(b);
+  }
+}
+show('body', 'idle');
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>
