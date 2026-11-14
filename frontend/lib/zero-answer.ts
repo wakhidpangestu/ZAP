@@ -139,10 +139,11 @@ export const ZERO_ANSWER_PATTERNS: ZeroAnswerPattern[] = [
     replacement: "[Berapakah nilai yang kamu peroleh dari perhitunganmu?]",
   },
 
-  // 6. Variabel hasil geometri (V / L) = angka polos atau angka + satuan panjang
+  // 6. Variabel hasil geometri (V / L huruf besar) = angka polos atau angka + satuan panjang.
+  // Case-sensitive pada V|L agar huruf kecil `l = 6` (lebar balok/persegi panjang) tidak ikut tersensor.
   {
     regex:
-      /\b(?:V|L)\s*(?:=|\\approx|≈)\s*[-+−]?\s*\d+(?:[.,]\d+)?\s*(?:\\text\{\s*(?:cm|m|mm|km|dm|satuan)\s*\}|cm|m|mm|km|dm|satuan)?\b(?!\s*[a-zA-Z(])/gi,
+      /\b(?:V|L)\s*(?:=|\\approx|≈)\s*[-+−]?\s*\d+(?:[.,]\d+)?\s*(?:\\text\{\s*(?:[cC][mM]|[mM]|[mM][mM]|[kK][mM]|[dD][mM]|[sS]atuan)\s*\}|[cC][mM]|[mM]|[mM][mM]|[kK][mM]|[dD][mM]|[sS]atuan)?\b(?!\s*[a-zA-Z(])/g,
     replacement: "[Berapakah nilai yang kamu peroleh dari perhitunganmu?]",
   },
 

@@ -956,6 +956,117 @@ export function resolveGeometricIntent(
   const polyS = labeled.s ?? pool[0] ?? 8;
   const polyT = labeled.t ?? pool[1] ?? 10;
 
+  // 2A. KASUS GRAFIK FUNGSI 2D & PERMUKAAN KUADRIK 3D (menghindari false-positive geometry-clarify)
+  const asksFunctionGraph =
+    /\b(grafik|kurva|plot|parabola|kuadrat|quadratic|sinus|cosinus|trigonometri|garis lurus|fungsi linear|pelana|saddle|paraboloid)\b/i.test(lower) ||
+    /y\s*=\s*[-+]?\s*\d*\s*x\s*(?:\^2|²)/i.test(lower);
+
+  if (asksFunctionGraph && (hasVisualCommand || has2DToken || has3DToken)) {
+    if (/\b(pelana|saddle|paraboloid)\b/i.test(lower) || /z\s*=\s*x\s*(?:\^2|²)\s*[-−]\s*y\s*(?:\^2|²)/i.test(lower)) {
+      return {
+        dimension: "3D",
+        targetTab: "3d",
+        entity: GEOMETRY_DATABASE.shapes_3d[0],
+        params: { a: 1, b: 1 },
+        unit: "satuan",
+        reply: `Permukaan kuadrik 3D **Pelana Kuda (Hiperbolik Paraboloid)** telah **AKTIF** di Papan Tulis Pintar 3D! 🎉\n\n### Persamaan Permukaan ($z = x^2 - y^2$):\n- **Sumbu-$x$ ($y=0$):** kurva membuka ke atas ($z = x^2$).\n- **Sumbu-$y$ ($x=0$):** kurva membuka ke bawah ($z = -y^2$).\n- **Titik Pelana (*Saddle Point*):** berada di titik asal $(0, 0, 0)$ — minimum di satu arah namun maksimum di arah tegak lurusnya.\n\n💡 **Tantangan Eksplorasi 3D:** Putar permukaan 3D di kanvas! Jika kita mengiris permukaan ini pada bidang $x = y$, bentuk kurva apa yang terlihat pada ketinggian $z$?`,
+        smartboardItem: {
+          targetTab: "3d",
+          model: "saddle",
+          label: "Pelana Kuda 3D (z = x² − y²)",
+          desc: "Permukaan kuadrik hiperbolik paraboloid z = x² - y²",
+          paramA: 1,
+          paramB: 1,
+          unit: "satuan",
+        },
+      };
+    }
+
+    if (/\b(sin|cos|sinus|cosinus|gelombang|trig|trigonometri)\b/i.test(lower)) {
+      const trigMatch = lower.match(/y\s*=\s*([-+]?\d+(?:[.,]\d+)?)?\s*\*?\s*sin\s*\(\s*([-+]?\d+(?:[.,]\d+)?)?\s*\*?\s*x\s*\)/i);
+      const a = trigMatch?.[1] ? parseFloat(trigMatch[1].replace(",", ".")) : 2;
+      const b = trigMatch?.[2] ? parseFloat(trigMatch[2].replace(",", ".")) : 1;
+      return {
+        dimension: "2D",
+        targetTab: "2d",
+        entity: GEOMETRY_DATABASE.shapes_2d[0],
+        params: { a, b },
+        unit: "rad",
+        reply: `Grafik fungsi trigonometri **Gelombang Sinus ($y = ${a}\\sin(${b === 1 ? "" : b}x)$)** telah **AKTIF** di Papan Tulis 2D! 📈\n\n### Karakteristik Gelombang:\n- **Amplitudo ($A$):** $|${a}|$ (tinggi simpangan maksimum dari sumbu-$x$).\n- **Frekuensi sudut ($\\omega$):** $${b}$ rad/satuan.\n\n💡 **Tantangan Eksplorasi 2D:** Amati puncak dan lembah gelombang di kanvas kanan — pada nilai $y$ berapakah kurva ini mencapai titik tertinggi, dan berapa panjang satu periodenya ($T = \\frac{2\\pi}{\\omega}$)?`,
+        smartboardItem: {
+          targetTab: "2d",
+          model: "2d_trig",
+          label: `Gelombang Sinus 2D (y = ${a} sin(${b === 1 ? "" : b}x))`,
+          desc: `Grafik gelombang sinus amplitudo ${a} dan frekuensi ${b}`,
+          paramA: a,
+          paramB: b,
+          paramC: 0,
+          unit: "rad",
+        },
+      };
+    }
+
+    if (/\b(parabola|kuadrat|quadratic)\b/i.test(lower) || /y\s*=\s*[-+]?\s*\d*\s*x\s*(?:\^2|²)/i.test(lower)) {
+      const quadMatch = lower.replace(/\s+/g, "").match(
+        /y=([-+]?\d*(?:[.,]\d+)?)x(?:\^2|²)([+-]\d*(?:[.,]\d+)?x)?([+-]\d+(?:[.,]\d+)?)?/i
+      );
+      const parseCoef = (raw: string | undefined, fallback: number): number => {
+        if (raw === undefined) return fallback;
+        if (raw === "" || raw === "+") return 1;
+        if (raw === "-") return -1;
+        const val = parseFloat(raw.replace(",", "."));
+        return Number.isFinite(val) ? val : fallback;
+      };
+      const a = quadMatch ? parseCoef(quadMatch[1], 1) : 1;
+      const bRaw = quadMatch?.[2]?.replace(/x$/i, "");
+      const b = quadMatch ? parseCoef(bRaw, 0) : 0;
+      const c = quadMatch?.[3] ? parseFloat(quadMatch[3].replace(",", ".")) : quadMatch ? 0 : -3;
+      const bTerm = b === 0 ? "" : b > 0 ? ` + ${b === 1 ? "" : b}x` : ` - ${Math.abs(b) === 1 ? "" : Math.abs(b)}x`;
+      const cTerm = c === 0 ? "" : c > 0 ? ` + ${c}` : ` - ${Math.abs(c)}`;
+      const aTerm = a === 1 ? "" : a === -1 ? "-" : `${a}`;
+      const expr = `y = ${aTerm}x^2${bTerm}${cTerm}`;
+
+      return {
+        dimension: "2D",
+        targetTab: "2d",
+        entity: GEOMETRY_DATABASE.shapes_2d[0],
+        params: { a, b, c },
+        unit: "satuan",
+        reply: `Grafik **Parabola 2D ($${expr}$)** telah **AKTIF** di Papan Tulis Interaktif 2D sebelah kanan! 📈\n\n### Parameter Kurva Kuadrat ($y = ax^2 + bx + c$):\n- **Koefisien:** $a = ${a},\\ b = ${b},\\ c = ${c}$\n- **Rumus Sumbu Simetri:** $$x_p = -\\frac{b}{2a}$$\n- **Arah Terbuka:** kurva membuka ke **${a >= 0 ? "atas" : "bawah"}** karena nilai $a ${a >= 0 ? "> 0" : "< 0"}$.\n\n💡 **Tantangan Eksplorasi 2D:** Geser slider $A$, $B$, atau $C$ di kanvas kanan! Dengan rumus di atas, di koordinat $(x_p, y_p)$ manakah letak **titik puncak** parabola ini, dan di titik mana kurva memotong sumbu-$x$?`,
+        smartboardItem: {
+          targetTab: "2d",
+          model: "2d_quadratic",
+          label: `Grafik Parabola 2D (${expr})`,
+          desc: `Grafik fungsi kuadrat ${expr} dengan titik puncak interaktif`,
+          paramA: a,
+          paramB: b,
+          paramC: c,
+          unit: "satuan",
+        },
+      };
+    }
+
+    if (/\b(garis lurus|fungsi linear|persamaan garis)\b/i.test(lower)) {
+      return {
+        dimension: "2D",
+        targetTab: "2d",
+        entity: GEOMETRY_DATABASE.shapes_2d[0],
+        params: { a: 2, b: 1 },
+        unit: "satuan",
+        reply: `Grafik **Fungsi Linear 2D ($y = 2x + 1$)** telah **AKTIF** di Papan Tulis 2D! 📈\n\n- **Gradien ($m$):** $2$ (kemiringan garis).\n- **Titik Potong Sumbu-$y$ ($c$):** $1$.\n\n💡 **Tantangan Eksplorasi 2D:** Jika $y = 0$, di titik $x$ berapakah garis lurus ini memotong sumbu-$x$?`,
+        smartboardItem: {
+          targetTab: "2d",
+          model: "2d_linear",
+          label: "Grafik Garis Lurus 2D (y = 2x + 1)",
+          desc: "Persamaan garis lurus y = ax + b",
+          paramA: 2,
+          paramB: 1,
+          unit: "satuan",
+        },
+      };
+    }
+  }
+
   // 2. KASUS A: PENGGUNA MEMINTA BENTUK 2D (ATAU JARING-JARING DARI BANGUN RUANG)
   // Jaring-jaring 2D hanya aktif jika pengguna memang meminta jaring-jaring atau memberi perintah visualisasi 2D spesifik
   const isNetRequest = hasNetToken || (has2DToken && (hasVisualCommand || /\b(2d|dua dimensi)\b/i.test(lower)));
@@ -1361,21 +1472,23 @@ export function resolveGeometricIntent(
 
   if (isKubus3D) {
     const s = nums[0] || 10;
+    const hasSlice = /\b(irisan|slice|potong|penampang)\b/i.test(lower);
     return {
       dimension: "3D",
       targetTab: "3d",
       entity: GEOMETRY_DATABASE.shapes_3d.find((s) => s.id === "kubus")!,
       params: { s },
       unit: parsedUnit,
-      reply: `Objek geometri 3D **Kubus** telah **AKTIF** dan ditampilkan di Papan Tulis Pintar 3D di sebelah kanan! 🎉\n\n### Parameter & Rumus Sifat Matematis Kubus ($s = ${s}\\text{ ${parsedUnit}}$):\n- **Panjang Rusuk ($s$):** $${s}\\text{ ${parsedUnit}}$\n- **Rumus Luas Permukaan ($L$):** $$L = 6s^2$$\n- **Rumus Volume Ruang ($V$):** $$V = s^3$$\n- **Rumus Diagonal Bidang ($d_b$):** $$d_b = s\\sqrt{2}$$\n- **Rumus Diagonal Ruang ($d_r$):** $$d_r = s\\sqrt{3}$$\n\n💡 **Tantangan Eksplorasi 3D:** Model 3D kubus siap dieksplorasi di kanvas! Sekarang giliranmu: dengan $s = ${s}\\text{ ${parsedUnit}}$, coba hitung berapakah luas permukaan, volume, atau panjang diagonalnya?`,
+      reply: `Objek geometri 3D **Kubus${hasSlice ? " + Bidang Irisan" : ""}** telah **AKTIF** dan ditampilkan di Papan Tulis Pintar 3D di sebelah kanan! 🎉\n\n### Parameter & Rumus Sifat Matematis Kubus ($s = ${s}\\text{ ${parsedUnit}}$):\n- **Panjang Rusuk ($s$):** $${s}\\text{ ${parsedUnit}}$\n- **Rumus Luas Permukaan ($L$):** $$L = 6s^2$$\n- **Rumus Volume Ruang ($V$):** $$V = s^3$$\n- **Rumus Diagonal Bidang ($d_b$):** $$d_b = s\\sqrt{2}$$\n- **Rumus Diagonal Ruang ($d_r$):** $$d_r = s\\sqrt{3}$$\n\n💡 **Tantangan Eksplorasi 3D:** Model 3D kubus${hasSlice ? " beserta bidang irisannya" : ""} siap dieksplorasi di kanvas! Sekarang giliranmu: dengan $s = ${s}\\text{ ${parsedUnit}}$, coba hitung berapakah luas permukaan, volume, atau panjang diagonalnya?`,
       smartboardItem: {
         targetTab: "3d",
         model: "solids",
         solidKind: "kubus",
-        label: `Kubus 3D (${s} ${parsedUnit})`,
-        desc: `Kubus 3D dengan panjang rusuk ${s} ${parsedUnit}`,
+        label: `Kubus 3D${hasSlice ? " + Irisan" : ""} (${s} ${parsedUnit})`,
+        desc: `Kubus 3D dengan panjang rusuk ${s} ${parsedUnit}${hasSlice ? " dan bidang irisan" : ""}`,
         paramA: s,
         unit: parsedUnit,
+        hasSlice,
       },
     };
   }

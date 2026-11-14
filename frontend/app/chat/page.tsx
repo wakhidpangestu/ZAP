@@ -3532,11 +3532,11 @@ export default function ZAPApp() {
     setTimeout(() => textareaRef.current?.focus(), 50);
   };
 
-  // Pemantik di layar kosong: isi composer dengan contoh yang menembak
-  // fitur inti (CFL/CAS, kanvas 2D, kanvas 3D), lalu fokuskan kursor.
+  // Pemantik di layar kosong: jalankan langsung 1-klik contoh interaktif
+  // (jebakan aljabar SymPy CFL, grafik parabola 2D, atau bangun ruang 3D + irisan).
   const applyStarterPrompt = (text: string) => {
-    setInputText(text);
-    setTimeout(() => textareaRef.current?.focus(), 50);
+    if (loading) return;
+    void handleSend(undefined, undefined, text);
   };
 
   // Normalisasi gambar di sisi klien dengan kompresi iteratif (<= 280 KB biner)
@@ -5328,31 +5328,32 @@ export default function ZAPApp() {
                 </div>
               </div>
 
-              {/* Pemantik pertama: tiga jalur nyata (CAS, kanvas 2D, kanvas 3D)
-                  agar layar kosong tidak menjadi jalan buntu. */}
+              {/* Pemantik pertama: tiga jalur nyata 1-klik (SymPy CFL, grafik 2D, 3D + irisan)
+                  yang langsung menampilkan keunggulan ZAP tanpa error. */}
               <div className="w-full max-w-3xl lg:max-w-4xl mt-3 flex flex-wrap items-center justify-start gap-2 px-1">
                 {[
                   {
-                    label: "Cek langkah aljabar",
+                    label: "Cari galat: (x + 3)²",
                     icon: FlaskConical,
-                    text: "Cek coretan saya: 2x + 6 = 14 -> 2x = 20 -> x = 10",
+                    text: "Cek coretan saya:\n(x + 3)^2 - 4 = 0\nx^2 + 9 - 4 = 0\nx^2 + 5 = 0",
                   },
                   {
-                    label: "Grafik y = x² − 3",
-                    icon: BookOpen,
-                    text: "tampilkan grafik y = x^2 - 3 di papan tulis 2d",
+                    label: "Grafik Parabola y = x² − 3",
+                    icon: Compass,
+                    text: "Tampilkan grafik parabola y = x^2 - 3 di papan tulis 2D",
                   },
                   {
-                    label: "Balok 10 × 6 × 4",
+                    label: "Kubus 3D + Irisan Bidang",
                     icon: Box,
-                    text: "buatkan balok 10x6x4 dalam bentuk 3d",
+                    text: "Tampilkan kubus 10 cm dengan irisan bidang 3D",
                   },
                 ].map((item) => (
                   <button
                     key={item.label}
                     type="button"
+                    disabled={loading || isAccountSuspended}
                     onClick={() => applyStarterPrompt(item.text)}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full border border-zinc-200 dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.04] text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:border-[#d9c3a6] hover:bg-[#faf4ed] dark:hover:bg-white/[0.07] dark:hover:border-white/[0.18] transition cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full border border-zinc-200 dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.04] text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:border-[#d9c3a6] hover:bg-[#faf4ed] dark:hover:bg-white/[0.07] dark:hover:border-white/[0.18] transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <item.icon className="w-3.5 h-3.5 text-[#8f5e32] dark:text-[#d4a574]" />
                     <span>{item.label}</span>
