@@ -33,11 +33,26 @@ export async function POST(req: Request) {
     }
     const body = (parsed ?? {}) as Partial<VerifyRequestBody>;
 
-    const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+    const rawKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+    const apiKey =
+      rawKey === "DEFAULT_SYNC"
+        ? (
+            process.env.GEMINI_API_KEY ||
+            process.env.GOOGLE_API_KEY ||
+            process.env.ZAP_GEMINI_API_KEY ||
+            ""
+          ).trim()
+        : rawKey;
     if (!apiKey) {
       return NextResponse.json(
-        { valid: false, error: "Google API Key tidak boleh kosong" },
-        { status: 400 }
+        {
+          valid: false,
+          error:
+            rawKey === "DEFAULT_SYNC"
+              ? "Masukkan Google Gemini API Key terlebih dahulu (kunci bawaan server belum dikonfigurasi)."
+              : "Google API Key tidak boleh kosong",
+        },
+        { status: rawKey === "DEFAULT_SYNC" ? 200 : 400 }
       );
     }
 

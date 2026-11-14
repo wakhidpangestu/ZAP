@@ -606,10 +606,17 @@ def harness_memory_stats(http_request: Request):
 # kunci akses - siapa pun yang memegang kode dapat ikut menggambar.
 # =========================================================================
 BOARD_COLORS = ["#f43f5e", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"]
+MAX_BOARD_ROOMS = 200
+MAX_BOARD_FRAME_CHARS = 65536
 _board_rooms: dict = {}
 
 
 def _board_room(room_key: str) -> dict:
+    if room_key not in _board_rooms and len(_board_rooms) >= MAX_BOARD_ROOMS:
+        empty_key = next((k for k, v in _board_rooms.items() if not v.get("peers")), None)
+        evict_key = empty_key if empty_key is not None else next(iter(_board_rooms), None)
+        if evict_key is not None:
+            _board_rooms.pop(evict_key, None)
     return _board_rooms.setdefault(
         room_key, {"peers": {}, "strokes": [], "notes": [], "state": None, "seq": 0}
     )
@@ -654,7 +661,14 @@ async def board_socket(websocket: WebSocket, room_id: str):
                 pass
     try:
         while True:
-            msg = await websocket.receive_json()
+            raw_text = await websocket.receive_text()
+            if len(raw_text) > MAX_BOARD_FRAME_CHARS:
+                continue
+            try:
+                import json as _json
+                msg = _json.loads(raw_text)
+            except Exception:
+                continue
             if not isinstance(msg, dict):
                 continue
             kind = msg.get("t")

@@ -46,6 +46,10 @@ function resolvePublicHost(req: NextRequest): string {
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+  // Tautan percakapan publik (/chat/s/<id>) tidak memerlukan sesi login.
+  if (pathname.startsWith("/chat/s/")) {
+    return NextResponse.next();
+  }
   const isChatPath = pathname === "/chat" || pathname.startsWith("/chat/");
   if (isChatPath && !req.cookies.get("zap_session")) {
     // Bangun URL publik dari header proksi: di belakang reverse proxy,

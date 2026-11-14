@@ -45,7 +45,7 @@ import {
   restoreAccountData,
   clearLocalWorkingSession,
   recordDeletedConversation,
-  getGoogleIdToken,
+  getSyncAuthToken,
 } from "@/utils/account-sync";
 import { useTheme } from "@/utils/theme";
 import {
@@ -1882,8 +1882,18 @@ export default function ZAPApp() {
   const [casAuditRunning, setCasAuditRunning] = useState<boolean>(false);
   const [casAuditResult, setCasAuditResult] = useState<string | null>(null);
   const [lastSweepResult, setLastSweepResult] = useState<string | null>(null);
-  const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(true);
-  const [autoLatexEnabled, setAutoLatexEnabled] = useState<boolean>(true);
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("zap_auto_sync") !== "false";
+    }
+    return true;
+  });
+  const [autoLatexEnabled, setAutoLatexEnabled] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("zap_auto_latex") !== "false";
+    }
+    return true;
+  });
   const [taskLogs, setTaskLogs] = useState<Array<{ id: string; name: string; time: string; status: "success" | "running" | "idle" }>>([
     { id: "log-1", name: "SymPy Deterministic CAS Watchdog", time: "Aktif (Realtime)", status: "success" },
     { id: "log-2", name: "Zero-Answer Policy Guardrail", time: "Aktif (Censor Enabled)", status: "success" },
@@ -1926,7 +1936,8 @@ export default function ZAPApp() {
         sampleModelType?: MathModelType,
         overrideText?: string,
         isRegenerate?: boolean,
-        historySnapshot?: Message[]
+        historySnapshot?: Message[],
+        overrideAttachedFiles?: UploadedFile[]
       ) => Promise<void>)
     | null
   >(null);
@@ -2398,10 +2409,12 @@ export default function ZAPApp() {
       const userKey = (currentUser.email || currentUser.id || "").toLowerCase().trim();
       saveConversations(next, userKey);
       // Debounce auto-backup percakapan akun Google ke cloud (1500ms) untuk mencegah race condition
-      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-      syncTimeoutRef.current = setTimeout(() => {
-        syncAccountBackup(currentUser, { conversations: next });
-      }, 1500);
+      if (autoSyncEnabled) {
+        if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+        syncTimeoutRef.current = setTimeout(() => {
+          syncAccountBackup(currentUser, { conversations: next });
+        }, 1500);
+      }
 
       // Sinkronkan URL browser ke path percakapan /c/<uuid> tanpa memicu unmount antar-segment route
       if (typeof window !== "undefined") {
@@ -2416,7 +2429,31 @@ export default function ZAPApp() {
 
       return next;
     });
-  }, [messages, activeProblemFirstStep, activeProblemContext, targetVar, activeConversationId, memoryReady, currentUser]);
+  }, [messages, activeProblemFirstStep, activeProblemContext, targetVar, activeConversationId, memoryReady, currentUser, autoSyncEnabled]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("zap_auto_sync", String(autoSyncEnabled));
+    } catch {}
+  }, [autoSyncEnabled]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("zap_auto_latex", String(autoLatexEnabled));
+    } catch {}
+  }, [autoLatexEnabled]);
+
+  // Beri tahu pengguna bila token Google / sesi cloud sync sudah kedaluwarsa (401)
+  useEffect(() => {
+    let notifiedExpired = false;
+    const onExpired = () => {
+      if (notifiedExpired) return;
+      notifiedExpired = true;
+      notify("Sesi autentikasi sinkronisasi cloud kedaluwarsa. Login ulang jika ingin melanjutkan cadangan otomatis ke server.", "info");
+    };
+    window.addEventListener("zap_sync_auth_expired", onExpired);
+    return () => window.removeEventListener("zap_sync_auth_expired", onExpired);
+  }, [notify]);
 
   useEffect(() => {
     // Hormati sakelar "Gulir otomatis": sebelumnya efek ini selalu menarik
@@ -2545,15 +2582,19 @@ export default function ZAPApp() {
 
   const handleLogout = async () => {
     if (currentUser) {
+      // Sinkronkan backup terenkripsi ke cloud SEBELUM kunci provider & kunci vault
+      // dihapus dari sesi lokal (bila dihapus duluan, syncAccountBackup ditolak karena vault terkunci).
+      if (!currentUser.isGuest && autoSyncEnabled) {
+        try {
+          await syncAccountBackup(currentUser);
+        } catch (e) {
+          console.warn("Gagal backup sebelum logout:", e);
+        }
+      }
       // Kunci provider akun ini hanya hidup di sesi; hapus saat keluar.
       clearProviderKeys(currentUser);
       // Vault dikunci lagi agar perangkat bersama tidak melanjutkan sesi kripto.
       clearVaultState(currentUser);
-      try {
-        await syncAccountBackup(currentUser);
-      } catch (e) {
-        console.warn("Gagal backup sebelum logout:", e);
-      }
     }
     clearLocalWorkingSession();
     setCurrentUser(null);
@@ -2601,21 +2642,28 @@ export default function ZAPApp() {
     conversationsRef.current = next;
     saveConversations(next, userKey);
 
-    // 3. Hapus permanen di server cloud vault
+    // 3. Hapus permanen di server cloud vault (dukung Google ID token & token sesi akun ZAP)
     if (currentUser) {
-      const idToken = getGoogleIdToken();
-      fetch(
-        `/api/user/sync?email=${encodeURIComponent(currentUser.email || "")}&userId=${encodeURIComponent(currentUser.id || "")}&convId=${encodeURIComponent(convId)}`,
-        {
-          method: "DELETE",
-          headers: idToken ? { Authorization: `Bearer ${idToken}` } : undefined,
-        }
-      ).catch((err) => console.warn("Gagal menghapus percakapan di server vault:", err));
+      const authToken = getSyncAuthToken();
+      const deleteReq = authToken
+        ? fetch(
+            `/api/user/sync?email=${encodeURIComponent(currentUser.email || "")}&userId=${encodeURIComponent(currentUser.id || "")}&convId=${encodeURIComponent(convId)}`,
+            {
+              method: "DELETE",
+              headers: { Authorization: `Bearer ${authToken}` },
+            }
+          ).catch((err) => console.warn("Gagal menghapus percakapan di server vault:", err))
+        : Promise.resolve();
 
-      syncAccountBackup(currentUser, {
-        conversations: next,
-        deletedConversationId: convId,
-        replaceConversations: true,
+      void deleteReq.then(() => {
+        if (autoSyncEnabled) {
+          return syncAccountBackup(currentUser, {
+            conversations: next,
+            deletedConversationId: convId,
+            replaceConversations: true,
+          });
+        }
+        return false;
       });
     }
 
@@ -2715,7 +2763,8 @@ export default function ZAPApp() {
     sampleModelType?: MathModelType,
     overrideText?: string,
     isRegenerate: boolean = false,
-    historySnapshot?: Message[]
+    historySnapshot?: Message[],
+    overrideAttachedFiles?: UploadedFile[]
   ) => {
     if (sampleModelType) {
       setActive3DModel(sampleModelType);
@@ -2823,7 +2872,7 @@ export default function ZAPApp() {
         );
         conversationsRef.current = next;
         saveConversations(next, userKey);
-        if (currentUser) {
+        if (currentUser && autoSyncEnabled) {
           syncAccountBackup(currentUser, { conversations: next });
         }
         return next;
@@ -2833,7 +2882,8 @@ export default function ZAPApp() {
     // JALUR 1: PERCAKAPAN SOKRATIK & VISUALISASI
     if (isConversational) {
       const userQuestion = textToProcess.trim();
-      const currentAttached = [...attachedFiles];
+      const currentAttached =
+        overrideAttachedFiles !== undefined ? [...overrideAttachedFiles] : [...attachedFiles];
 
       const userMsg: Message = {
         id: "msg_" + Date.now(),
@@ -2844,10 +2894,13 @@ export default function ZAPApp() {
         smartboardItem: detectedGeometry,
       };
 
-      if (!isRegenerate) {
+      if (!isRegenerate && overrideAttachedFiles === undefined) {
         setMessages((prev) => [...prev, userMsg]);
         setInputText("");
         setAttachedFiles([]);
+      } else if (!isRegenerate) {
+        setMessages((prev) => [...prev, userMsg]);
+        setInputText("");
       }
       setLoading(true);
       setLoadingStatus("ChatZAP Socratic Engine sedang merumuskan panduan...");
@@ -2901,9 +2954,13 @@ export default function ZAPApp() {
         const savedCustomBaseUrl = getProviderSetting("customBaseUrl", currentUser);
         const savedCustomModelName = getProviderSetting("customModelName", currentUser);
 
+        const syncAuthToken = getSyncAuthToken();
         const res = await fetch("/api/chat", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(syncAuthToken ? { Authorization: `Bearer ${syncAuthToken}` } : {}),
+          },
           body: JSON.stringify({
             message: userQuestion,
             attachedFiles: currentAttached.map((f) => ({
@@ -2912,6 +2969,9 @@ export default function ZAPApp() {
               content: f.content || f.dataUrl,
             })),
             workspaceMode,
+            interactionMode,
+            reasoningEffort,
+            autoLatexEnabled,
             conversationHistory,
             activeProblem: activeProblemContext,
             modelId: selectedModel.id,
@@ -3248,7 +3308,8 @@ export default function ZAPApp() {
       undefined,
       userTurn.rawText || userTurn.steps?.join("\n"),
       true,
-      historySnapshot
+      historySnapshot,
+      userTurn.attachedFiles
     );
   }, [messages, loading, memoryReady, authChecked, pendingWatchTick]);
 
@@ -3277,9 +3338,19 @@ export default function ZAPApp() {
         const prevUserMsg = messages[i];
         const prevText = prevUserMsg.rawText || prevUserMsg.steps?.join("\n");
         if (prevText) {
-          const filtered = messages.filter((m) => m.id !== assistantMsgId);
-          setMessages(filtered);
-          handleSend(prevUserMsg.steps, undefined, prevText, true, filtered);
+          const updatedView = messages.filter((m) => m.id !== assistantMsgId);
+          // Snapshot riwayat SEBELUM pesan pengguna yang diulang agar tidak terjadi duplikasi
+          // pertanyaan di akhir conversationHistory, sambil tetap meneruskan lampiran aslinya.
+          const historyBeforeUser = messages.slice(0, i);
+          setMessages(updatedView);
+          handleSend(
+            prevUserMsg.steps,
+            undefined,
+            prevText,
+            true,
+            historyBeforeUser,
+            prevUserMsg.attachedFiles
+          );
         }
         break;
       }
@@ -3287,6 +3358,10 @@ export default function ZAPApp() {
   };
 
   const handleFeedback = (msgId: string, type: "up" | "down") => {
+    const targetIdx = messages.findIndex((m) => m.id === msgId);
+    const targetMsg = targetIdx >= 0 ? messages[targetIdx] : undefined;
+    const nextFeedback = targetMsg?.feedback === type ? null : type;
+
     setMessages((prev) =>
       prev.map((m) => {
         if (m.id === msgId) {
@@ -3298,6 +3373,30 @@ export default function ZAPApp() {
         return m;
       })
     );
+
+    if (nextFeedback && targetMsg) {
+      let relatedUserText = "";
+      for (let i = targetIdx - 1; i >= 0; i--) {
+        if (messages[i].sender === "user") {
+          relatedUserText = messages[i].rawText || messages[i].steps?.join("\n") || "";
+          break;
+        }
+      }
+      fetch("/api/chat/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rating: nextFeedback,
+          conversationId: activeConversationIdRef.current,
+          userMessage: relatedUserText,
+          assistantReply: targetMsg.replyText || "",
+          userEmail: currentUser?.email || "anonymous",
+          userName: currentUser?.name || "Pengguna ChatZAP",
+        }),
+      }).catch(() => {
+        // Non-blocking feedback telemetry
+      });
+    }
   };
 
   const handleSpeakMessage = (text: string, msgId: string) => {
@@ -3514,8 +3613,20 @@ export default function ZAPApp() {
             const next = [newFile, ...prev];
             try {
               localStorage.setItem("zap_workspace_files", JSON.stringify(next));
-            } catch (err) {
-              console.warn(err);
+            } catch {
+              try {
+                // Jika kuota localStorage penuh oleh gambar base64, simpan metadata berkas saja
+                const compact = next.map((item) => ({
+                  ...item,
+                  dataUrl:
+                    item.dataUrl && item.dataUrl.length > 8192 ? undefined : item.dataUrl,
+                  content:
+                    item.content && item.content.length > 8192 ? undefined : item.content,
+                }));
+                localStorage.setItem("zap_workspace_files", JSON.stringify(compact));
+              } catch (err) {
+                console.warn(err);
+              }
             }
             return next;
           });
@@ -3550,8 +3661,20 @@ export default function ZAPApp() {
             const next = [newFile, ...prev];
             try {
               localStorage.setItem("zap_workspace_files", JSON.stringify(next));
-            } catch (err) {
-              console.warn(err);
+            } catch {
+              try {
+                // Jika kuota localStorage penuh oleh gambar base64, simpan metadata berkas saja
+                const compact = next.map((item) => ({
+                  ...item,
+                  dataUrl:
+                    item.dataUrl && item.dataUrl.length > 8192 ? undefined : item.dataUrl,
+                  content:
+                    item.content && item.content.length > 8192 ? undefined : item.content,
+                }));
+                localStorage.setItem("zap_workspace_files", JSON.stringify(compact));
+              } catch (err) {
+                console.warn(err);
+              }
             }
             return next;
           });

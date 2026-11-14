@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { resolveGeometricIntent, buildResultFromSpec, validateGeometrySpec, looksLikeGeometryRequest, type GeometrySpec } from "@/data/geometry-database";
 import { getUserSecurityStatus, recordUserSecurityViolation } from "@/utils/security-vault";
 import { cleanModelResponse, finalizeModelReply, sanitizeZeroAnswer } from "@/lib/zero-answer";
+import { rateLimitByIp } from "@/utils/rate-limit";
+import { verifyBearerIdentity } from "@/lib/account-session";
 
 interface ActiveProblemContext {
   steps?: string[];
@@ -10,6 +12,10 @@ interface ActiveProblemContext {
   explanation?: string;
   socraticHint?: string;
   harnessMemoryContext?: string;
+  workspaceMode?: "write" | "read";
+  interactionMode?: "standard" | "strict" | "visual" | "cas";
+  reasoningEffort?: "low" | "medium" | "high";
+  autoLatexEnabled?: boolean;
   counterExample?: {
     test_variable?: string;
     test_value?: number;
@@ -177,6 +183,9 @@ interface ChatRequestBody {
   activeProblem?: ActiveProblemContext | null;
   attachedFiles?: Array<{ name: string; content?: string; type?: string; dataUrl?: string }>;
   workspaceMode?: "write" | "read";
+  interactionMode?: "standard" | "strict" | "visual" | "cas";
+  reasoningEffort?: "low" | "medium" | "high";
+  autoLatexEnabled?: boolean;
   modelId?: string;
   apiKey?: string;
   mistralApiKey?: string;
@@ -572,10 +581,29 @@ Jadikan konteks coretan di atas sebagai rujukan utama jika siswa bertanya tentan
     prompt += `\n\nMEMORI EPISODIK & BASIS PENGETAHUAN TERVERIFIKASI ZAP:\n${activeProblem.harnessMemoryContext}\nGunakan pola bimbingan Sokratik dan rumus terverifikasi di atas sebagai rujukan tanpa membocorkan jawaban akhir.`;
   }
 
-  if (workspaceMode === "read") {
+  const effectiveWorkspaceMode = activeProblem?.workspaceMode || workspaceMode;
+  if (effectiveWorkspaceMode === "read") {
     prompt += `\n\nMODE BACA SAJA: Hanya lakukan bimbingan Sokratik dan verifikasi matematis; jangan menyusun draf catatan atau rumus baru.`;
   } else {
     prompt += `\n\nMODE CATATAN: Anda boleh menyusun draf rumus dan catatan belajar di dalam percakapan ini. Jangan mengklaim telah menulis atau mengubah berkas apa pun di luar percakapan.`;
+  }
+
+  if (activeProblem?.interactionMode === "strict") {
+    prompt += `\n\nGAYA PEDAGOGIS STRICT SOCRATIC: Jangan memberi contoh substitusi penuh; ajukan 1-2 pertanyaan pemantik terarah agar siswa menemukan langkah berikutnya sendiri.`;
+  } else if (activeProblem?.interactionMode === "visual") {
+    prompt += `\n\nGAYA PEDAGOGIS VISUAL: Utamakan intuisi geometris, analogi luas/ruang, dan arahkan siswa ke visualisasi 2D/3D bila relevan.`;
+  } else if (activeProblem?.interactionMode === "cas") {
+    prompt += `\n\nGAYA PEDAGOGIS CAS ANALISIS: Pecah pemeriksaan secara ketat baris-demi-baris dan tekankan hukum aljabar ekuivalen di tiap transisi.`;
+  }
+
+  if (activeProblem?.reasoningEffort === "low") {
+    prompt += `\n\nTINGKAT KEDALAMAN: Ringkas, padat, langsung ke poin inti (maksimal 2-3 paragraf pendek).`;
+  } else if (activeProblem?.reasoningEffort === "high") {
+    prompt += `\n\nTINGKAT KEDALAMAN: Mendalam dan teliti—uraikan alasan di balik tiap konsep/teorema sebelum melempar pertanyaan Sokratik.`;
+  }
+
+  if (activeProblem?.autoLatexEnabled === false) {
+    prompt += `\n\nFORMAT RUMUS: Gunakan notasi teks/ASCII matematika yang bersih dan mudah dibaca tanpa membungkus setiap simbol dengan $...$ kecuali diminta.`;
   }
 
   return prompt;
@@ -689,6 +717,14 @@ Pesan pengguna: "${message.replace(/"/g, "'")}"`;
 
 async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sink?: DeltaSink) {
   try {
+    const rateLimit = rateLimitByIp(req, "chat-post", 60);
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { error: "Terlalu banyak permintaan obrolan. Silakan tunggu sebentar lalu coba lagi." },
+        { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds) } }
+      );
+    }
+
     let body: ChatRequestBody;
     try {
       body = preParsedBody ?? ((await req.json()) as ChatRequestBody);
@@ -716,6 +752,10 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
       customApiKey,
       modelId,
       userName,
+      workspaceMode,
+      interactionMode,
+      reasoningEffort,
+      autoLatexEnabled,
     } = body;
 
     if (!rawMessage || typeof rawMessage !== "string") {
@@ -729,24 +769,31 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
 
     // 0. VERIFIKASI KEAMANAN: Status penangguhan & strike SELALU dari registry server.
     // Nilai isSuspended/jailbreakStrikes dari body klien diabaikan sepenuhnya.
+    // Anti-Framing: pembacaan status mengecek email klaim MAUPUN kunci IP anonim;
+    // tetapi penulisan strike baru HANYA boleh menargetkan email bila kepemilikannya
+    // terverifikasi lewat Bearer token (tanpa token valid, strike dicatat ke IP pemanggil).
     const userEmail = (body.userEmail || "").trim().toLowerCase();
     const clientIp =
       req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
       req.headers.get("x-real-ip")?.trim() ||
       "";
-    const identityKey =
-      userEmail && userEmail !== "anonymous" ? userEmail : clientIp ? `anon:${clientIp}` : "";
-    const serverSec = identityKey ? getUserSecurityStatus(identityKey) : null;
-    const serverSuspended = Boolean(
-      serverSec?.isSuspended &&
-        !(serverSec.unbannedAt && serverSec.unbannedAt > (serverSec.suspendedAt || 0))
-    );
+    const ipIdentityKey = clientIp ? `anon:${clientIp}` : "anon:local";
+    const claimedEmailKey = userEmail && userEmail !== "anonymous" ? userEmail : "";
+    const identityKey = claimedEmailKey || ipIdentityKey;
+
+    const isRecordSuspended = (sec: ReturnType<typeof getUserSecurityStatus> | null) =>
+      Boolean(sec?.isSuspended && !(sec.unbannedAt && sec.unbannedAt > (sec.suspendedAt || 0)));
+
+    const claimedSec = claimedEmailKey ? getUserSecurityStatus(claimedEmailKey) : null;
+    const ipSec = getUserSecurityStatus(ipIdentityKey);
+    const activeSec = isRecordSuspended(claimedSec) ? claimedSec : isRecordSuspended(ipSec) ? ipSec : (claimedSec || ipSec);
+    const serverSuspended = isRecordSuspended(claimedSec) || isRecordSuspended(ipSec);
 
     if (serverSuspended) {
       return NextResponse.json(
         {
           isJailbreak: true,
-          strikeCount: serverSec?.strikes ?? 2,
+          strikeCount: activeSec?.strikes ?? 2,
           isSuspended: true,
           reply: `⛔ **AKUN ANDA SEDANG DALAM STATUS DITANGGUHKAN.**\n\nSeluruh hak akses percakapan ke ChatZAP telah dibekukan secara permanen akibat pelanggaran berulang terhadap kebijakan keamanan (percobaan jailbreak/prompt injection).\n\nUntuk pengajuan banding atau permohonan pemulihan akun, silakan hubungi tim administrator melalui email resmi:\n✉️ **wakhidpangestu1@gmail.com**`,
           model: "ChatZAP Security Sentinel (Akun Ditangguhkan)",
@@ -759,10 +806,16 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
     // 0b. VERIFIKASI KEAMANAN: Deteksi Percobaan Jailbreak & Prompt Injection
     const jailbreakCheck = detectJailbreakAttempt(rawMessage);
     if (jailbreakCheck.isJailbreak) {
-      const newStrikes = (serverSec?.strikes || 0) + 1;
+      const verifiedEmail = await verifyBearerIdentity(req);
+      const strikeTargetKey =
+        verifiedEmail && (!claimedEmailKey || verifiedEmail === claimedEmailKey)
+          ? verifiedEmail
+          : ipIdentityKey;
+      const targetSec = getUserSecurityStatus(strikeTargetKey);
+      const newStrikes = (targetSec?.strikes || 0) + 1;
       const nowSuspended = newStrikes >= 2;
-      if (identityKey) {
-        recordUserSecurityViolation(identityKey, newStrikes, nowSuspended, jailbreakCheck.reason);
+      if (strikeTargetKey) {
+        recordUserSecurityViolation(strikeTargetKey, newStrikes, nowSuspended, jailbreakCheck.reason);
       }
 
       if (!nowSuspended) {
@@ -794,11 +847,28 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
     if (harnessResult.corpusReferences.length > 0) {
       corpusRefsByRequest.set(req, harnessResult.corpusReferences);
     }
+    const harnessUiDirectives: Partial<ActiveProblemContext> = {
+      workspaceMode: workspaceMode === "read" ? "read" : "write",
+      interactionMode:
+        interactionMode === "strict" || interactionMode === "visual" || interactionMode === "cas"
+          ? interactionMode
+          : "standard",
+      reasoningEffort:
+        reasoningEffort === "low" || reasoningEffort === "medium" || reasoningEffort === "high"
+          ? reasoningEffort
+          : "high",
+      autoLatexEnabled: autoLatexEnabled !== false,
+    };
     const activeProblem: ActiveProblemContext | null | undefined = rawActiveProblem
-      ? { ...rawActiveProblem, harnessMemoryContext: harnessMemoryContext || undefined }
-      : harnessMemoryContext
-      ? { harnessMemoryContext }
-      : rawActiveProblem;
+      ? {
+          ...rawActiveProblem,
+          ...harnessUiDirectives,
+          harnessMemoryContext: harnessMemoryContext || undefined,
+        }
+      : {
+          ...harnessUiDirectives,
+          ...(harnessMemoryContext ? { harnessMemoryContext } : {}),
+        };
     const previousAssistantTurn =
       conversationHistory?.slice().reverse().find((t) => t.role === "assistant")?.content || "";
     recordTurnToAgentHarness(rawMessage, previousAssistantTurn, rawActiveProblem, identityKey || undefined);
@@ -1085,6 +1155,9 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
       } else if (modelId === "nvidia-gpt-oss" || modelId === "gpt-oss-20b") {
         targetModel = "openai/gpt-oss-20b";
         targetFriendlyName = "GPT-OSS 20B";
+      } else if (modelId === "gemma-4-31b-it") {
+        targetModel = "google/gemma-3-27b-it";
+        targetFriendlyName = "Gemma 27B IT";
       }
 
       // Model teks-saja (Ultra 550B, Poolside Laguna, GPT-OSS, DiffusionGemma) menolak multimodal
@@ -1218,7 +1291,7 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
     }
 
     // 1. Panggil Custom Model API (Ollama / vLLM / LMStudio / Proxy)
-    if (modelId === "custom-api") {
+    if (modelId === "custom-api" || modelId === "custom-byo") {
       const targetBase = customBaseUrl?.trim() || "http://localhost:11434/v1";
       const urlCheck = validateCustomBaseUrl(targetBase);
       if (!urlCheck.ok) {
@@ -1548,7 +1621,7 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
     }
 
     // 2. Jika pengguna memilih mesin SymPy lokal, langsung gunakan respons instan (0 ms latency)
-    if (modelId === "sympy-cfl") {
+    if (modelId === "sympy-cfl" || modelId === "sympy-cas-deterministic") {
       const socraticReply = generateSocraticFallbackResponse(message, activeProblem);
       return NextResponse.json({
         reply: socraticReply,

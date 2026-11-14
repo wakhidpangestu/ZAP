@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
-import os from "os";
-import path from "path";
 import crypto from "crypto";
 import { writeJsonFileAtomic } from "@/lib/atomic-file";
+import { getCandidateVaultFilePaths, getWritableVaultFilePath } from "@/lib/vault-dir";
+import { rateLimitByIp } from "@/utils/rate-limit";
+import { verifyBearerIdentity } from "@/lib/account-session";
 
 interface ShareMessage {
   id: string;
@@ -25,6 +26,7 @@ interface SharedConversationPayload {
   title: string;
   authorName?: string;
   authorEmail?: string;
+  ownerSecretHash?: string;
   isPublic: boolean;
   sharedAt: number;
   updatedAt: number;
@@ -39,11 +41,16 @@ interface ShareRequestBody {
   messages?: unknown;
   authorName?: unknown;
   authorEmail?: unknown;
+  ownerSecret?: unknown;
   includeAuthor?: boolean;
   isPublic?: boolean;
   targetVar?: string;
   active3DModel?: string;
   shareId?: unknown;
+}
+
+function hashOwnerSecret(secret: string): string {
+  return crypto.createHash("sha256").update(secret).digest("hex");
 }
 
 // Fallback penyimpanan memori & /tmp agar tetap berfungsi di lingkungan read-only
@@ -59,39 +66,9 @@ function rememberShare(shareId: string, payload: SharedConversationPayload): voi
   memoryShares.set(shareId, payload);
 }
 
-function tryEnsureDir(dir: string): string {
-  try {
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.accessSync(dir, fs.constants.W_OK);
-    return dir;
-  } catch {
-    return "";
-  }
-}
-
-function getSharesDir(): string {
-  const primary = tryEnsureDir(path.join(process.cwd(), ".zap_vault", "shares"));
-  if (primary) return primary;
-  return tryEnsureDir(path.join(os.tmpdir(), ".zap_vault", "shares"));
-}
-
 function getCandidateSharePaths(cleanId: string): string[] {
   if (!cleanId) return [];
-  const dirs = [
-    path.join(process.cwd(), ".zap_vault", "shares"),
-    path.join(os.tmpdir(), ".zap_vault", "shares"),
-  ];
-  const paths: string[] = [];
-  for (const dir of dirs) {
-    const resolvedDir = path.resolve(dir);
-    const targetPath = path.resolve(resolvedDir, `${cleanId}.json`);
-    if (targetPath.startsWith(resolvedDir + path.sep)) {
-      paths.push(targetPath);
-    }
-  }
-  return paths;
+  return getCandidateVaultFilePaths(["shares"], `${cleanId}.json`);
 }
 
 // Batas payload share: mencegah penulisan berkas share berukuran sembarang.
@@ -102,14 +79,7 @@ const MAX_SHARE_TITLE_CHARS = 200;
 function getShareFilePath(shareId: string): string {
   const cleanId = shareId.trim().toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 64);
   if (!cleanId) return "";
-  const dir = getSharesDir();
-  if (!dir) return "";
-  const targetPath = path.resolve(dir, `${cleanId}.json`);
-  const resolvedDir = path.resolve(dir);
-  if (!targetPath.startsWith(resolvedDir + path.sep)) {
-    return "";
-  }
-  return targetPath;
+  return getWritableVaultFilePath(["shares"], `${cleanId}.json`);
 }
 
 function loadSharePayload(cleanId: string): SharedConversationPayload | null {
@@ -133,6 +103,14 @@ function loadSharePayload(cleanId: string): SharedConversationPayload | null {
 // GET /api/chat/share?id=<shareId>
 export async function GET(req: Request) {
   try {
+    const limit = rateLimitByIp(req, "chat-share-get", 120);
+    if (!limit.allowed) {
+      return NextResponse.json(
+        { exists: false, error: "Terlalu banyak permintaan. Silakan coba lagi nanti." },
+        { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } }
+      );
+    }
+
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
 
@@ -165,9 +143,10 @@ export async function GET(req: Request) {
         );
       }
 
-      // Jangan pernah mengekspos email pemilik ke pemegang tautan publik
+      // Jangan pernah mengekspos email pemilik atau hash rahasia ke pemegang tautan publik
       const publicData = { ...data } as Record<string, unknown>;
       delete publicData.authorEmail;
+      delete publicData.ownerSecretHash;
       // no-store: tautan yang baru dinonaktifkan tidak boleh tersaji dari cache.
       return NextResponse.json(
         { exists: true, data: publicData },
@@ -193,6 +172,14 @@ export async function GET(req: Request) {
 // POST /api/chat/share
 export async function POST(req: Request) {
   try {
+    const limit = rateLimitByIp(req, "chat-share-post", 30);
+    if (!limit.allowed) {
+      return NextResponse.json(
+        { error: "Terlalu banyak permintaan berbagi tautan. Silakan coba lagi nanti." },
+        { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } }
+      );
+    }
+
     const declaredLength = Number(req.headers.get("content-length") || 0);
     if (Number.isFinite(declaredLength) && declaredLength > MAX_SHARE_BODY_BYTES) {
       return NextResponse.json(
@@ -214,6 +201,7 @@ export async function POST(req: Request) {
       messages,
       authorName,
       authorEmail,
+      ownerSecret: requestedOwnerSecret,
       includeAuthor = true,
       isPublic = true,
       targetVar,
@@ -222,6 +210,10 @@ export async function POST(req: Request) {
     } = body;
 
     const normalizedAuthorEmail = authorEmail ? authorEmail.toString().toLowerCase().trim() : undefined;
+    const cleanOwnerSecret =
+      typeof requestedOwnerSecret === "string" && requestedOwnerSecret.trim().length >= 16
+        ? requestedOwnerSecret.trim().slice(0, 128)
+        : undefined;
 
     // Pola shareId yang ketat: minimal 10 karakter alfanumerik + strip
     const SHARE_ID_PATTERN = /^[a-z0-9-]{10,64}$/i;
@@ -237,19 +229,43 @@ export async function POST(req: Request) {
     }
 
     // Kepemilikan WAJIB untuk mengubah/menonaktifkan share yang sudah ada:
-    // authorEmail harus disertakan dan cocok dengan berkas tersimpan.
-    const assertOwnership = (existing: SharedConversationPayload): NextResponse | null => {
-      if (
-        !normalizedAuthorEmail ||
-        !existing.authorEmail ||
-        existing.authorEmail.toLowerCase().trim() !== normalizedAuthorEmail
-      ) {
-        return NextResponse.json(
-          { error: "Akses ditolak: kepemilikan percakapan tidak dapat diverifikasi." },
-          { status: 403 }
-        );
+    // pemanggil harus membuktikan kepemilikan lewat ownerSecret (SHA-256 timing-safe)
+    // ATAU Bearer token terverifikasi yang cocok dengan authorEmail berkas tersimpan.
+    const assertOwnership = async (existing: SharedConversationPayload): Promise<NextResponse | null> => {
+      if (cleanOwnerSecret && existing.ownerSecretHash) {
+        const candidateHash = Buffer.from(hashOwnerSecret(cleanOwnerSecret), "utf-8");
+        const storedHash = Buffer.from(existing.ownerSecretHash, "utf-8");
+        if (
+          candidateHash.length === storedHash.length &&
+          crypto.timingSafeEqual(candidateHash, storedHash)
+        ) {
+          return null;
+        }
       }
-      return null;
+
+      const verifiedBearerEmail = await verifyBearerIdentity(req);
+      if (
+        verifiedBearerEmail &&
+        existing.authorEmail &&
+        existing.authorEmail.toLowerCase().trim() === verifiedBearerEmail
+      ) {
+        return null;
+      }
+
+      // Kompatibilitas berkas share lama yang dibuat sebelum ownerSecretHash ada:
+      if (
+        !existing.ownerSecretHash &&
+        normalizedAuthorEmail &&
+        existing.authorEmail &&
+        existing.authorEmail.toLowerCase().trim() === normalizedAuthorEmail
+      ) {
+        return null;
+      }
+
+      return NextResponse.json(
+        { error: "Akses ditolak: kepemilikan percakapan tidak dapat diverifikasi." },
+        { status: 403 }
+      );
     };
 
     // Jika ini adalah permintaan untuk menonaktifkan share yang sudah ada:
@@ -257,7 +273,7 @@ export async function POST(req: Request) {
       const cleanId = requestedShareId.trim().toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 64);
       const existing = loadSharePayload(cleanId);
       if (existing) {
-        const ownershipError = assertOwnership(existing);
+        const ownershipError = await assertOwnership(existing);
         if (ownershipError) return ownershipError;
         existing.isPublic = false;
         existing.updatedAt = Date.now();
@@ -303,7 +319,7 @@ export async function POST(req: Request) {
     // Jika share sudah ada (baik di disk maupun di memori), hanya pemilik terverifikasi yang bisa memperbarui
     const existingData = loadSharePayload(shareId);
     if (existingData) {
-      const ownershipError = assertOwnership(existingData);
+      const ownershipError = await assertOwnership(existingData);
       if (ownershipError) return ownershipError;
     } else {
       for (const candidatePath of getCandidateSharePaths(shareId)) {
@@ -316,6 +332,11 @@ export async function POST(req: Request) {
       }
     }
     const filePath = getShareFilePath(shareId);
+    const issuedOwnerSecret =
+      existingData?.ownerSecretHash && cleanOwnerSecret
+        ? cleanOwnerSecret
+        : cleanOwnerSecret || crypto.randomBytes(24).toString("hex");
+    const ownerSecretHash = existingData?.ownerSecretHash || hashOwnerSecret(issuedOwnerSecret);
 
     const cleanTitle = (title || "Percakapan ZAP").toString().trim().slice(0, MAX_SHARE_TITLE_CHARS);
     const finalAuthor = includeAuthor
@@ -343,8 +364,9 @@ export async function POST(req: Request) {
       title: cleanTitle,
       authorName: finalAuthor,
       authorEmail: normalizedAuthorEmail,
+      ownerSecretHash,
       isPublic: Boolean(isPublic),
-      sharedAt: Date.now(),
+      sharedAt: existingData?.sharedAt || Date.now(),
       updatedAt: Date.now(),
       messages: sanitizedMessages,
       targetVar: targetVar || "x",
@@ -359,6 +381,7 @@ export async function POST(req: Request) {
     return NextResponse.json({
       success: true,
       shareId,
+      ownerSecret: issuedOwnerSecret,
       isPublic: payload.isPublic,
       sharePath: `/a/chat/s/${shareId}`,
       altSharePath: `/chat/s/${shareId}`,

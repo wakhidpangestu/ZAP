@@ -12,6 +12,7 @@ import {
   User,
 } from "lucide-react";
 import { type ZAPUser } from "@/components/GoogleAuthButton";
+import { getSyncAuthToken } from "@/utils/account-sync";
 
 interface ShareModalProps {
   isOpen: boolean;
@@ -39,6 +40,7 @@ export default function ShareModal({
   const [isPublic, setIsPublic] = useState<boolean>(true);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [shareId, setShareId] = useState<string>("");
+  const [ownerSecret, setOwnerSecret] = useState<string>("");
   const [shareUrl, setShareUrl] = useState<string>("");
   const [copied, setCopied] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +60,7 @@ export default function ShareModal({
 
   useEffect(() => {
     setShareId("");
+    setOwnerSecret("");
     setShareUrl("");
     setError(null);
     setCopied(false);
@@ -73,11 +76,16 @@ export default function ShareModal({
       setCopied(false);
 
       try {
+        const authToken = getSyncAuthToken();
         const res = await fetch("/api/chat/share", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          },
           body: JSON.stringify({
-            ...(shareId && currentUser?.email ? { shareId } : {}),
+            ...(shareId && (ownerSecret || currentUser?.email) ? { shareId } : {}),
+            ...(ownerSecret ? { ownerSecret } : {}),
             conversationId: conversation?.id,
             title: conversation?.title || "Percakapan ChatZAP",
             messages: conversation?.messages || [],
@@ -95,6 +103,9 @@ export default function ShareModal({
           const origin = typeof window !== "undefined" ? window.location.origin : "";
           if (isMounted) {
             setShareId(json.shareId);
+            if (typeof json.ownerSecret === "string" && json.ownerSecret) {
+              setOwnerSecret(json.ownerSecret);
+            }
             setShareUrl(`${origin}${json.sharePath}`);
             setIsPublic(true);
           }
@@ -126,11 +137,16 @@ export default function ShareModal({
     setIsGenerating(true);
     setError(null);
     try {
+      const authToken = getSyncAuthToken();
       const res = await fetch("/api/chat/share", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
         body: JSON.stringify({
           shareId,
+          ...(ownerSecret ? { ownerSecret } : {}),
           conversationId: conversation.id,
           title: conversation.title,
           messages: conversation.messages,
