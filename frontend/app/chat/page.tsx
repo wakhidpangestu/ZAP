@@ -2906,7 +2906,11 @@ export default function ZAPApp() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             message: userQuestion,
-            attachedFiles: currentAttached.map((f) => ({ name: f.name, content: f.content || f.dataUrl })),
+            attachedFiles: currentAttached.map((f) => ({
+              name: f.name,
+              type: f.type,
+              content: f.content || f.dataUrl,
+            })),
             workspaceMode,
             conversationHistory,
             activeProblem: activeProblemContext,
@@ -3412,12 +3416,76 @@ export default function ZAPApp() {
     setTimeout(() => textareaRef.current?.focus(), 50);
   };
 
+  // Normalisasi gambar di sisi klien (konversi HEIC/HEIF/AVIF/GIF/BMP/SVG/WebP &
+  // kompresi foto kamera besar) ke JPEG agar diterima semua model Vision (NVIDIA NIM, Gemini, OpenAI, Claude).
+  const normalizeImageForUpload = useCallback(
+    async (file: File, rawDataUrl: string): Promise<{ dataUrl: string; type: string; size: number }> => {
+      const mime = (file.type || "").toLowerCase();
+      const isStandardSmall =
+        (mime === "image/jpeg" || mime === "image/png") &&
+        file.size > 0 &&
+        file.size <= 450 * 1024;
+      if (typeof document === "undefined") {
+        return { dataUrl: rawDataUrl, type: file.type || "image/png", size: file.size };
+      }
+
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 1600;
+          const w = img.naturalWidth || img.width;
+          const h = img.naturalHeight || img.height;
+          if (!w || !h) {
+            resolve({ dataUrl: rawDataUrl, type: file.type || "image/png", size: file.size });
+            return;
+          }
+          if (isStandardSmall && w <= maxDim && h <= maxDim) {
+            resolve({ dataUrl: rawDataUrl, type: mime, size: file.size });
+            return;
+          }
+          const scale = Math.min(1, maxDim / Math.max(w, h));
+          const targetW = Math.max(1, Math.round(w * scale));
+          const targetH = Math.max(1, Math.round(h * scale));
+          try {
+            const canvas = document.createElement("canvas");
+            canvas.width = targetW;
+            canvas.height = targetH;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) {
+              resolve({ dataUrl: rawDataUrl, type: file.type || "image/png", size: file.size });
+              return;
+            }
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, targetW, targetH);
+            ctx.drawImage(img, 0, 0, targetW, targetH);
+            const jpegDataUrl = canvas.toDataURL("image/jpeg", 0.86);
+            if (jpegDataUrl.startsWith("data:image/jpeg")) {
+              const approxBytes = Math.round((jpegDataUrl.length * 3) / 4);
+              resolve({ dataUrl: jpegDataUrl, type: "image/jpeg", size: approxBytes });
+              return;
+            }
+          } catch {
+            // Fallback ke dataUrl asli bila canvas gagal
+          }
+          resolve({ dataUrl: rawDataUrl, type: file.type || "image/png", size: file.size });
+        };
+        img.onerror = () => {
+          resolve({ dataUrl: rawDataUrl, type: file.type || "image/png", size: file.size });
+        };
+        img.src = rawDataUrl;
+      });
+    },
+    []
+  );
+
   const processFileList = useCallback((files: FileList | File[]) => {
     Array.from(files).forEach((file) => {
       const isText =
         file.type.startsWith("text/") ||
         /\.(txt|py|js|ts|tsx|jsx|json|md|csv|html|css|yaml|yml|log|sh|tex|latex)$/i.test(file.name);
-      const isImg = file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(file.name);
+      const isImg =
+        file.type.startsWith("image/") ||
+        /\.(png|jpe?g|webp|gif|bmp|svg|heic|heif|avif|tiff?)$/i.test(file.name);
       const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
 
       const reader = new FileReader();
@@ -3454,15 +3522,18 @@ export default function ZAPApp() {
         };
         reader.readAsText(file);
       } else if (isImg || isPdf) {
-        reader.onload = (ev) => {
-          const dataUrl = ev.target?.result as string;
+        reader.onload = async (ev) => {
+          const rawDataUrl = ev.target?.result as string;
+          const normalized = isImg
+            ? await normalizeImageForUpload(file, rawDataUrl)
+            : { dataUrl: rawDataUrl, type: file.type || "application/pdf", size: file.size };
           const newFile: UploadedFile = {
             id: "file_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5),
-            name: file.name || `image_${Date.now()}.${isPdf ? "pdf" : "png"}`,
-            size: file.size,
-            type: file.type || (isPdf ? "application/pdf" : "image/png"),
-            dataUrl: dataUrl,
-            content: dataUrl,
+            name: file.name || `image_${Date.now()}.${isPdf ? "pdf" : "jpg"}`,
+            size: normalized.size,
+            type: normalized.type,
+            dataUrl: normalized.dataUrl,
+            content: normalized.dataUrl,
             uploadedAt: Date.now(),
             workspaceId: activeWorkspaceId,
           };
@@ -3507,7 +3578,7 @@ export default function ZAPApp() {
         });
       }
     });
-  }, [activeWorkspaceId]);
+  }, [activeWorkspaceId, normalizeImageForUpload]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -3934,7 +4005,7 @@ export default function ZAPApp() {
         ref={fileInputRef}
         type="file"
         multiple
-        accept=".txt,.py,.js,.ts,.tsx,.json,.md,.csv,.pdf,.png,.jpg,.jpeg,.tex,.latex"
+        accept=".txt,.py,.js,.ts,.tsx,.json,.md,.csv,.pdf,.png,.jpg,.jpeg,.webp,.heic,.heif,.tex,.latex"
         className="hidden"
         onChange={handleFileUpload}
       />

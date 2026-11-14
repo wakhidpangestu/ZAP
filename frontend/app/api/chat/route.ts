@@ -814,18 +814,26 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
         const isImage =
           Boolean(f.type?.startsWith("image/")) ||
           rawContent.startsWith("data:image/") ||
-          /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(f.name);
+          /\.(png|jpe?g|webp|gif|bmp|svg|heic|heif|avif|tiff?)$/i.test(f.name);
 
         if (isImage && rawContent.startsWith("data:image/")) {
-          const mimeMatch = rawContent.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
-          const mimeType = mimeMatch ? mimeMatch[1] : (f.type || "image/png");
-          const pureBase64 = rawContent.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "");
-          imageAttachments.push({
-            name: f.name,
-            dataUrl: rawContent,
-            mimeType,
-            pureBase64,
-          });
+          const dataUrlMatch = rawContent.match(/^data:(image\/[a-zA-Z0-9.+-]+)(?:;[^,]+)*;base64,([\s\S]+)$/i);
+          if (dataUrlMatch) {
+            const rawMime = dataUrlMatch[1].toLowerCase();
+            const mimeType = rawMime === "image/jpg" ? "image/jpeg" : rawMime;
+            const pureBase64 = dataUrlMatch[2].replace(/\s+/g, "");
+            imageAttachments.push({
+              name: f.name,
+              dataUrl: `data:${mimeType};base64,${pureBase64}`,
+              mimeType,
+              pureBase64,
+            });
+          } else {
+            textAttachments.push({
+              name: f.name,
+              content: rawContent.slice(0, 4000),
+            });
+          }
         } else {
           textAttachments.push({
             name: f.name,
@@ -954,24 +962,35 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
         nvidiaApiKey?.trim() ||
         process.env.NVIDIA_API_KEY?.trim() ||
         "";
+      const nimDeepSeekImages = imageAttachments.filter((img) =>
+        ["image/jpeg", "image/png", "image/webp"].includes(img.mimeType.toLowerCase())
+      );
+      const deepSeekModel =
+        nimDeepSeekImages.length > 0
+          ? "nvidia/nemotron-3.5-super-vl-120b-a12b"
+          : "deepseek-ai/deepseek-v4.1-flash";
+      const deepSeekLabel =
+        nimDeepSeekImages.length > 0
+          ? "DeepSeek V4.1 Flash (Vision Fallback)"
+          : "DeepSeek V4.1 Flash";
       try {
         const nvidiaRes = await callCustomOpenAIAPI(
           message,
           "https://integrate.api.nvidia.com/v1",
-          "deepseek-ai/deepseek-v4.1-flash",
+          deepSeekModel,
           nvidiaKey,
           conversationHistory,
           activeProblem,
           userName,
-          8000,
+          nimDeepSeekImages.length > 0 ? 20000 : 8000,
           sessionLanguage,
-          "DeepSeek V4.1 Flash",
-          imageAttachments
+          deepSeekLabel,
+          nimDeepSeekImages
         );
         if (nvidiaRes.text) {
           return NextResponse.json({
             reply: finalizeModelReply(nvidiaRes.text, generateSocraticFallbackResponse(message, activeProblem), { targetVariable }),
-            model: "DeepSeek V4.1 Flash (NVIDIA NIM)",
+            model: `${deepSeekLabel} (NVIDIA NIM)`,
             source: "nvidia-nim",
           });
         }
@@ -1007,9 +1026,15 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
       let targetModel = "nvidia/nemotron-3.5-bolt-e4b";
       let targetFriendlyName = "Auto-Agent (Nemotron-3.5 Bolt Tutor)";
 
+      // NVIDIA NIM hanya menerima format gambar JPEG, PNG, dan WebP.
+      // Format seperti HEIC/HEIF/GIF/BMP/SVG memicu 415 Unsupported Media Type.
+      const nimSupportedImages = imageAttachments.filter((img) =>
+        ["image/jpeg", "image/png", "image/webp"].includes(img.mimeType.toLowerCase())
+      );
+
       if (!modelId || modelId === "auto-agent") {
         if (imageAttachments.length > 0) {
-          // ROUTING CERDAS MULTIMODAL: Jika user melampirkan foto/video/gambar, arahkan ke model Vision
+          // ROUTING CERDAS MULTIMODAL: Jika user melampirkan foto/gambar, arahkan ke model Vision
           if (effectiveGeminiKey) {
             try {
               const geminiVisionRes = await callGeminiAPI(
@@ -1062,6 +1087,30 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
         targetFriendlyName = "GPT-OSS 20B";
       }
 
+      // Model teks-saja (Ultra 550B, Poolside Laguna, GPT-OSS, DiffusionGemma) menolak multimodal
+      // dengan HTTP 400; alihkan otomatis ke model Vision ketika pengguna melampirkan gambar.
+      const NVIDIA_VISION_MODELS = new Set([
+        "nvidia/nemotron-3.5-super-vl-120b-a12b",
+        "nvidia/nemotron-3.5-bolt-e4b",
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+      ]);
+      if (nimSupportedImages.length > 0 && !NVIDIA_VISION_MODELS.has(targetModel)) {
+        targetModel = "nvidia/nemotron-3.5-super-vl-120b-a12b";
+        targetFriendlyName = `${targetFriendlyName} (Vision Router)`;
+      }
+
+      // Bila semua gambar berformat yang ditolak NVIDIA NIM (mis. HEIC/GIF/BMP/SVG),
+      // laporkan instruksi format gambar yang jelas alih-alih melempar 415 & menyalahkan API Key.
+      if (imageAttachments.length > 0 && nimSupportedImages.length === 0) {
+        const detectedMimes = Array.from(new Set(imageAttachments.map((i) => i.mimeType))).join(", ");
+        const socraticFallback = generateSocraticFallbackResponse(message, activeProblem);
+        return NextResponse.json({
+          reply: `⚠️ **Format Gambar Belum Didukung Model Vision (${detectedMimes}):**\nModel Vision saat ini hanya menerima format **JPG/JPEG**, **PNG**, atau **WebP**.\n\n*Tip: Ambil tangkapan layar (screenshot) dari foto soal atau ubah ke JPG/PNG lalu kirim ulang agar gambar dapat dibaca oleh asisten.*\n\n---\n\n${socraticFallback}`,
+          model: "Local Socratic (Media Format Notice)",
+          source: "fallback-with-warning",
+        });
+      }
+
       // Pastikan hanya menggunakan kunci valid berformat 'nvapi-', fallback ke sistem env jika kosong/salah
       let effectiveKey = "";
       if (nvidiaApiKey && typeof nvidiaApiKey === "string" && nvidiaApiKey.trim().startsWith("nvapi-")) {
@@ -1072,7 +1121,13 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
         effectiveKey = systemNvidiaKey;
       }
 
+      const isMediaRejection = (res: UniversalCallResult): boolean =>
+        res.status === 415 ||
+        res.status === 422 ||
+        /unsupported media type|media could not be screened/i.test(res.error || "");
+
       try {
+        const nvidiaTimeoutMs = nimSupportedImages.length > 0 ? 22000 : 14000;
         let nvidiaRes = await callCustomOpenAIAPI(
           message,
           targetBase,
@@ -1081,17 +1136,17 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
           conversationHistory,
           activeProblem,
           userName,
-          14000,
+          nvidiaTimeoutMs,
           sessionLanguage,
           targetFriendlyName,
-          imageAttachments,
+          nimSupportedImages,
           // Hanya percobaan pertama yang di-stream: retry setelah stream parsial
           // akan menduplikasi teks di layar pengguna.
           sink
         );
 
         // Jika kunci pengguna menghasilkan 401 atau gagal, otomatis coba dengan kunci sistem env
-        if ((!nvidiaRes.text || nvidiaRes.status === 401) && effectiveKey !== systemNvidiaKey && systemNvidiaKey) {
+        if ((!nvidiaRes.text || nvidiaRes.status === 401) && !isMediaRejection(nvidiaRes) && effectiveKey !== systemNvidiaKey && systemNvidiaKey) {
           console.warn("Kunci kustom NVIDIA tidak valid atau 401, mencoba dengan kunci sistem env...");
           effectiveKey = systemNvidiaKey;
           nvidiaRes = await callCustomOpenAIAPI(
@@ -1102,15 +1157,21 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
             conversationHistory,
             activeProblem,
             userName,
-            14000,
+            nvidiaTimeoutMs,
             sessionLanguage,
             targetFriendlyName,
-            imageAttachments
+            nimSupportedImages
           );
         }
 
-        // Jika model besar mengalami timeout atau error, coba fallback cepat ke nemotron-3.5-bolt-e4b
-        if (!nvidiaRes.text && targetModel !== "nvidia/nemotron-3.5-bolt-e4b") {
+        // Jika model besar mengalami timeout atau error (bukan 401/403 key atau 415/422 media), coba fallback cepat ke nemotron-3.5-bolt-e4b
+        if (
+          !nvidiaRes.text &&
+          targetModel !== "nvidia/nemotron-3.5-bolt-e4b" &&
+          nvidiaRes.status !== 401 &&
+          nvidiaRes.status !== 403 &&
+          !isMediaRejection(nvidiaRes)
+        ) {
           console.warn(`Model ${targetModel} tidak merespon, mencoba fallback cepat ke nemotron-3.5-bolt-e4b...`);
           nvidiaRes = await callCustomOpenAIAPI(
             message,
@@ -1120,10 +1181,10 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
             conversationHistory,
             activeProblem,
             userName,
-            10000,
+            14000,
             sessionLanguage,
             "Nemotron-3.5 Bolt (Fast Fallback)",
-            imageAttachments
+            nimSupportedImages
           );
           if (nvidiaRes.text) {
             targetFriendlyName = "Nemotron-3.5 Bolt (Fast Fallback)";
@@ -1139,8 +1200,14 @@ async function handleChatPost(req: Request, preParsedBody?: ChatRequestBody, sin
         }
         if (nvidiaRes.error) {
           const socraticFallback = generateSocraticFallbackResponse(message, activeProblem);
+          let actionHint = "*Silakan coba kirim ulang pesanmu beberapa saat lagi, atau pilih model lain di menu model.*";
+          if (nvidiaRes.status === 401 || nvidiaRes.status === 403) {
+            actionHint = "*Periksa kembali NVIDIA API Key kamu di menu Connector.*";
+          } else if (isMediaRejection(nvidiaRes)) {
+            actionHint = "*Format atau ukuran gambar tidak dapat diproses oleh layanan Vision. Coba kirim ulang gambar berformat JPG/PNG (atau tangkapan layar) berukuran lebih kecil.*";
+          }
           return NextResponse.json({
-            reply: `⚠️ **Catatan NVIDIA NIM API:**\n${nvidiaRes.error}\n\n*Periksa kembali NVIDIA API Key kamu di menu Connector.*\n\n---\n\n${socraticFallback}`,
+            reply: `⚠️ **Catatan NVIDIA NIM API:**\n${nvidiaRes.error}\n\n${actionHint}\n\n---\n\n${socraticFallback}`,
             model: "Local Socratic (NVIDIA Warning)",
             source: "fallback-with-warning",
           });

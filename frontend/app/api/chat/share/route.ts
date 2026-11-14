@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import crypto from "crypto";
 import { writeJsonFileAtomic } from "@/lib/atomic-file";
@@ -45,12 +46,52 @@ interface ShareRequestBody {
   shareId?: unknown;
 }
 
-function getSharesDir(): string {
-  const dir = path.join(process.cwd(), ".zap_vault", "shares");
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+// Fallback penyimpanan memori & /tmp agar tetap berfungsi di lingkungan read-only
+// (Vercel serverless, container dengan permission volume terbatas).
+const memoryShares = new Map<string, SharedConversationPayload>();
+const MAX_MEMORY_SHARES = 1000;
+
+function rememberShare(shareId: string, payload: SharedConversationPayload): void {
+  if (memoryShares.size >= MAX_MEMORY_SHARES && !memoryShares.has(shareId)) {
+    const oldestKey = memoryShares.keys().next().value;
+    if (oldestKey) memoryShares.delete(oldestKey);
   }
-  return dir;
+  memoryShares.set(shareId, payload);
+}
+
+function tryEnsureDir(dir: string): string {
+  try {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.accessSync(dir, fs.constants.W_OK);
+    return dir;
+  } catch {
+    return "";
+  }
+}
+
+function getSharesDir(): string {
+  const primary = tryEnsureDir(path.join(process.cwd(), ".zap_vault", "shares"));
+  if (primary) return primary;
+  return tryEnsureDir(path.join(os.tmpdir(), ".zap_vault", "shares"));
+}
+
+function getCandidateSharePaths(cleanId: string): string[] {
+  if (!cleanId) return [];
+  const dirs = [
+    path.join(process.cwd(), ".zap_vault", "shares"),
+    path.join(os.tmpdir(), ".zap_vault", "shares"),
+  ];
+  const paths: string[] = [];
+  for (const dir of dirs) {
+    const resolvedDir = path.resolve(dir);
+    const targetPath = path.resolve(resolvedDir, `${cleanId}.json`);
+    if (targetPath.startsWith(resolvedDir + path.sep)) {
+      paths.push(targetPath);
+    }
+  }
+  return paths;
 }
 
 // Batas payload share: mencegah penulisan berkas share berukuran sembarang.
@@ -71,6 +112,24 @@ function getShareFilePath(shareId: string): string {
   return targetPath;
 }
 
+function loadSharePayload(cleanId: string): SharedConversationPayload | null {
+  for (const candidatePath of getCandidateSharePaths(cleanId)) {
+    try {
+      if (fs.existsSync(candidatePath)) {
+        const raw = fs.readFileSync(candidatePath, "utf-8");
+        const parsed = JSON.parse(raw) as SharedConversationPayload;
+        if (parsed && typeof parsed === "object") {
+          rememberShare(cleanId, parsed);
+          return parsed;
+        }
+      }
+    } catch {
+      // Abaikan berkas rusak atau tidak terbaca; coba sumber berikutnya
+    }
+  }
+  return memoryShares.get(cleanId) || null;
+}
+
 // GET /api/chat/share?id=<shareId>
 export async function GET(req: Request) {
   try {
@@ -84,19 +143,16 @@ export async function GET(req: Request) {
       );
     }
 
-    const cleanId = id.trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
-    const filePath = getShareFilePath(cleanId);
-    if (!cleanId || !filePath) {
+    const cleanId = id.trim().toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 64);
+    if (!cleanId) {
       return NextResponse.json(
         { exists: false, error: "ID tautan percakapan tidak valid" },
         { status: 400 }
       );
     }
 
-    if (fs.existsSync(filePath)) {
-      const raw = fs.readFileSync(filePath, "utf-8");
-      const data: SharedConversationPayload = JSON.parse(raw);
-
+    const data = loadSharePayload(cleanId);
+    if (data) {
       // Verifikasi status publik: jika pemilik mematikan public share, blokir akses!
       if (!data.isPublic) {
         return NextResponse.json(
@@ -198,21 +254,18 @@ export async function POST(req: Request) {
 
     // Jika ini adalah permintaan untuk menonaktifkan share yang sudah ada:
     if (requestedShareId && isPublic === false) {
-      const cleanId = requestedShareId.trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
-      const filePath = getShareFilePath(cleanId);
-      if (fs.existsSync(filePath)) {
-        const raw = fs.readFileSync(filePath, "utf-8");
-        const existing: SharedConversationPayload = JSON.parse(raw);
+      const cleanId = requestedShareId.trim().toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 64);
+      const existing = loadSharePayload(cleanId);
+      if (existing) {
         const ownershipError = assertOwnership(existing);
         if (ownershipError) return ownershipError;
         existing.isPublic = false;
         existing.updatedAt = Date.now();
-        // Atomik: kegagalan penulisan tidak boleh meninggalkan berkas share rusak.
-        if (!writeJsonFileAtomic(filePath, existing)) {
-          return NextResponse.json(
-            { error: "Gagal menyimpan status publik percakapan di server." },
-            { status: 500 }
-          );
+        rememberShare(cleanId, existing);
+        const filePath = getShareFilePath(cleanId);
+        // Atomik: tulis ke disk bila writable; pada filesystem read-only tetap tersimpan di memori.
+        if (filePath) {
+          writeJsonFileAtomic(filePath, existing);
         }
         return NextResponse.json({
           success: true,
@@ -242,29 +295,27 @@ export async function POST(req: Request) {
     if (!shareId || typeof shareId !== "string") {
       shareId = crypto.randomUUID();
     }
-    shareId = shareId.toLowerCase();
-
-    // Jika file share sudah ada, hanya pemilik terverifikasi yang bisa memperbarui
-    const filePath = getShareFilePath(shareId);
-    if (!filePath) {
+    shareId = shareId.trim().toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 64);
+    if (!shareId) {
       return NextResponse.json({ error: "shareId tidak valid." }, { status: 400 });
     }
-    if (fs.existsSync(filePath)) {
-      let existingData: SharedConversationPayload | null = null;
-      try {
-        existingData = JSON.parse(fs.readFileSync(filePath, "utf-8")) as SharedConversationPayload;
-      } catch {
-        existingData = null;
-      }
-      if (!existingData) {
-        return NextResponse.json(
-          { error: "Data tautan yang sudah ada tidak dapat diverifikasi kepemilikannya." },
-          { status: 403 }
-        );
-      }
+
+    // Jika share sudah ada (baik di disk maupun di memori), hanya pemilik terverifikasi yang bisa memperbarui
+    const existingData = loadSharePayload(shareId);
+    if (existingData) {
       const ownershipError = assertOwnership(existingData);
       if (ownershipError) return ownershipError;
+    } else {
+      for (const candidatePath of getCandidateSharePaths(shareId)) {
+        if (fs.existsSync(candidatePath)) {
+          return NextResponse.json(
+            { error: "Data tautan yang sudah ada tidak dapat diverifikasi kepemilikannya." },
+            { status: 403 }
+          );
+        }
+      }
     }
+    const filePath = getShareFilePath(shareId);
 
     const cleanTitle = (title || "Percakapan ZAP").toString().trim().slice(0, MAX_SHARE_TITLE_CHARS);
     const finalAuthor = includeAuthor
@@ -300,11 +351,9 @@ export async function POST(req: Request) {
       active3DModel: active3DModel || undefined,
     };
 
-    if (!writeJsonFileAtomic(filePath, payload)) {
-      return NextResponse.json(
-        { error: "Gagal menyimpan tautan percakapan di server." },
-        { status: 500 }
-      );
+    rememberShare(shareId, payload);
+    if (filePath) {
+      writeJsonFileAtomic(filePath, payload);
     }
 
     return NextResponse.json({

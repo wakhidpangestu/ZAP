@@ -57,6 +57,13 @@ export default function ShareModal({
   }, [isOpen, onClose]);
 
   useEffect(() => {
+    setShareId("");
+    setShareUrl("");
+    setError(null);
+    setCopied(false);
+  }, [conversation?.id]);
+
+  useEffect(() => {
     if (!isOpen || !conversation) return;
 
     let isMounted = true;
@@ -70,6 +77,7 @@ export default function ShareModal({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            ...(shareId && currentUser?.email ? { shareId } : {}),
             conversationId: conversation?.id,
             title: conversation?.title || "Percakapan ChatZAP",
             messages: conversation?.messages || [],
@@ -83,7 +91,7 @@ export default function ShareModal({
         });
 
         const json = await res.json();
-        if (json.success && json.sharePath) {
+        if (res.ok && json.success && json.sharePath) {
           const origin = typeof window !== "undefined" ? window.location.origin : "";
           if (isMounted) {
             setShareId(json.shareId);
@@ -97,8 +105,7 @@ export default function ShareModal({
         if (isMounted) {
           const msg = err instanceof Error ? err.message : "Terjadi kesalahan saat membagikan percakapan.";
           setError(msg);
-          const origin = typeof window !== "undefined" ? window.location.origin : "";
-          setShareUrl(`${origin}/a/chat/s/${conversation?.id || "conv"}`);
+          setShareUrl("");
         }
       } finally {
         if (isMounted) setIsGenerating(false);
@@ -110,6 +117,7 @@ export default function ShareModal({
     return () => {
       isMounted = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, conversation, includeAuthor, currentUser, active3DModel]);
 
   if (!isOpen || !conversation) return null;
