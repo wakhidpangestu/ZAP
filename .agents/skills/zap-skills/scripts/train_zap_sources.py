@@ -25,7 +25,13 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 # Resolve project root directory (4 levels up from .agents/skills/zap-skills/scripts/)
-BASE_DIR = Path(__file__).resolve().parents[4]
+SCRIPT_ROOT_DEPTH = 4
+BANNER_WIDTH = 76
+MAX_HARVEST_HISTORY_RUNS = 20
+DEFAULT_TRAIN_COUNT = 20
+DEFAULT_HARVEST_MAX_ITEMS = 25
+
+BASE_DIR = Path(__file__).resolve().parents[SCRIPT_ROOT_DEPTH]
 BACKEND_DIR = BASE_DIR / "backend"
 
 if str(BASE_DIR) not in sys.path:
@@ -113,10 +119,10 @@ def run_train(store: MathCorpusStore, tier_arg: str, count: int, domain_arg: str
     )
     total_generated = 0
 
-    print("=" * 76)
+    print("=" * BANNER_WIDTH)
     print(f"[ZAP Trainer] Synthesizing Verified Data | Tiers: {', '.join(tiers)} | "
           f"Domains: {', '.join(domains) if domains else '-'} | Count: {count}")
-    print("=" * 76)
+    print("=" * BANNER_WIDTH)
 
     if train_math:
         for t in tiers:
@@ -155,9 +161,9 @@ def run_harvest(store: MathCorpusStore, max_items: int) -> int:
     - Ringkasan setiap kali berjalan ditulis ke `data/harvest_state.json` agar
       proses auto-upgrade dapat dipantau (kapan terakhir jalan, berapa item lolos).
     """
-    print("=" * 76)
+    print("=" * BANNER_WIDTH)
     print(f"[ZAP Internet Crawler] Fetching Verified Math Sources (max_items/source={max_items})")
-    print("=" * 76)
+    print("=" * BANNER_WIDTH)
     for src_key, reason in DISABLED_SOURCES.items():
         print(f"  [-] Source '{src_key:<24}' : DILEWATI ({reason})")
 
@@ -213,11 +219,11 @@ def run_harvest(store: MathCorpusStore, max_items: int) -> int:
                 "disabled_sources": DISABLED_SOURCES,
             }
         )
-        state["runs"] = runs[-20:]
+        state["runs"] = runs[-MAX_HARVEST_HISTORY_RUNS:]
         state["last_run_at"] = runs[-1]["finished_at"]
         state["last_inserted_verified"] = inserted
         state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"  [OK] Riwayat harvest ditulis ke {state_path} (menyimpan 20 putaran terakhir).")
+        print(f"  [OK] Riwayat harvest ditulis ke {state_path} (menyimpan {MAX_HARVEST_HISTORY_RUNS} putaran terakhir).")
     except Exception as state_err:
         print(f"  [Warn] Gagal menulis harvest_state.json: {state_err}")
 
@@ -226,9 +232,9 @@ def run_harvest(store: MathCorpusStore, max_items: int) -> int:
 
 def run_seed_memory(harness: ZAPAgentHarness) -> int:
     """Seed foundational episodic conversation memories into ZAPAgentHarness."""
-    print("=" * 76)
+    print("=" * BANNER_WIDTH)
     print("[ZAP Agent Harness] Seeding Foundational Episodic Conversation Memories")
-    print("=" * 76)
+    print("=" * BANNER_WIDTH)
     seeded_turns = seed_foundational_agent_memories(harness)
     stats = harness.get_memory_stats()
     print(f"  [+] Seeded turns processed : {seeded_turns}")
@@ -240,9 +246,9 @@ def run_seed_memory(harness: ZAPAgentHarness) -> int:
 
 def run_audit(store: MathCorpusStore, harness: ZAPAgentHarness) -> Dict[str, Any]:
     """Comprehensive audit across all 5 ZAP data source & agent harness pillars."""
-    print("=" * 76)
+    print("=" * BANNER_WIDTH)
     print("[ZAP Skills Audit] Inspecting All 5 Unified ZAP Pillars")
-    print("=" * 76)
+    print("=" * BANNER_WIDTH)
 
     # 1. Audit Pillar 1: Curriculum Taxonomy (matematika TK-S3 + domain baru)
     total_topics = 0
@@ -375,9 +381,9 @@ def run_audit(store: MathCorpusStore, harness: ZAPAgentHarness) -> Dict[str, Any
 
 def run_verify() -> bool:
     """Execute the full deterministic pytest suite (CFL + Platform + Agent Harness)."""
-    print("\n" + "=" * 76)
+    print("\n" + "=" * BANNER_WIDTH)
     print("[ZAP Verification] Running Full Deterministic Pytest Suite (tests/ + backend/tests_platform/)")
-    print("=" * 76)
+    print("=" * BANNER_WIDTH)
     cmd = [
         sys.executable,
         "-m",
@@ -412,7 +418,7 @@ def main():
         choices=["matematika", "pemrograman", "fisika", "kimia", "ALL"],
         help="Target domain for --train (default: ALL = matematika + 3 domain baru)",
     )
-    parser.add_argument("--count", type=int, default=20, help="Samples per tier/domain for --train (default: 20)")
+    parser.add_argument("--count", type=int, default=DEFAULT_TRAIN_COUNT, help=f"Samples per tier/domain for --train (default: {DEFAULT_TRAIN_COUNT})")
     parser.add_argument(
         "--harvest",
         "--crawl-web",
@@ -420,7 +426,7 @@ def main():
         action="store_true",
         help="Crawl & fetch verified math sources from the internet (GSM8K, HuggingFace, Wikimedia, Kurikulum Merdeka)",
     )
-    parser.add_argument("--max-items", type=int, default=25, help="Max items per source for --harvest")
+    parser.add_argument("--max-items", type=int, default=DEFAULT_HARVEST_MAX_ITEMS, help=f"Max items per source for --harvest (default: {DEFAULT_HARVEST_MAX_ITEMS})")
     parser.add_argument(
         "--seed-memory",
         action="store_true",
@@ -455,7 +461,7 @@ def main():
 
     if args.learn_turn:
         res = harness.learn_from_conversation(user_message=args.learn_turn)
-        print("=" * 76)
+        print("=" * BANNER_WIDTH)
         print("[ZAP Agent Harness] Learned from Conversation Turn:")
         print(json.dumps(res, indent=2, ensure_ascii=False))
 

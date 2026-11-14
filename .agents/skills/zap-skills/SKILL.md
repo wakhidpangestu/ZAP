@@ -1,19 +1,46 @@
 ---
 name: zap-skills
-description: >-
-  Master Unified AI Agent Skill & Harness for ZAP (Zero Answer Policy). Combines all ZAP capabilities into
-  one skill: (1) Continuous Learning from Conversation Memory (Episodic Agent Harness), (2) Multi-Source
-  Verified Internet Crawling & Data Fetching (GSM8K, HuggingFace Datasets API, Wikimedia REST v1 Theorems,
-  Kurikulum Merdeka), (3) Procedural Machine-Verified Multi-Domain Corpus Synthesis (Matematika TK–S3,
-  Pemrograman, Fisika, Kimia), (4) 2D/3D Spatial Geometry
-  Knowledge Base Synchronization, and (5) CFL Engine & Mutation Security Verification.
+description: Train, harvest, audit, and verify ZAP's SymPy corpus, episodic memory, and CFL guardrails. Do NOT use for standalone frontend UI or non-ZAP codebases.
+metadata:
+  author: Logicodix ZAP Team
+  version: "1.0.0"
+  tags: [education, math, sympy, agent-harness, verification]
 ---
 
 # ZAP Skills — Unified AI Agent Harness, Web Crawler, Data Trainer & Verification System
 
-This is the **single, unified master skill (`zap-skills`)** for training, harnessing, crawling, and verifying the **ZAP (Zero Answer Policy)** AI agent model.
+## Purpose
 
-All project skills—including **Continuous Conversation Memory Learning**, **Verified Internet Data Crawling**, **TK–S3 SymPy Corpus Training**, **2D/3D Spatial Geometry Synchronization**, and **CFL Security & Mutation Verification**—are consolidated into this single skill.
+Provide one unified operational workflow (`zap-skills`) to train, harvest, audit, and verify the **ZAP (Zero Answer Policy)** AI agent model across five pillars:
+
+- **Continuous Conversation Memory Learning** (`ZAPAgentHarness`)
+- **Verified Internet Data Crawling** (`gsm8k_sample`, `hf_gsm8k_api`, `wikimedia_math_theorems`)
+- **TK–S3 SymPy & Multi-Domain Corpus Training** (Matematika, Pemrograman, Fisika, Kimia)
+- **2D/3D Spatial Geometry Synchronization** (`GeometryDatabase` ↔ Three.js)
+- **CFL Security & Mutation Verification** (`RobustZeroAnswerGuardrail` & pytest)
+
+Do NOT use this skill for unrelated frontend UI design or repositories outside the ZAP backend/harness architecture.
+
+## Prerequisites
+
+- **Python**: Python 3.12+ (tested on Python 3.15 in this repo) run from the repository root (`logicodix/`).
+- **Backend dependencies**: `sympy`, `pydantic`, `fastapi`, and `pytest` installed in the active environment (used by `backend/cfl/`, `backend/data_engine/`, and `backend/zapcore/`).
+- **Network access (optional)**: Required only when running `--harvest` to fetch from GitHub Raw, HuggingFace Datasets Server, and Wikimedia REST v1.
+- **Data directory**: Read/write access to `data/` (`zap_math_corpus.jsonl`, `zap_math_corpus.db`, `zap_agent_memory.jsonl`, `harvest_state.json`, `zap_geometry_database.json`).
+
+## Available Scripts
+
+| Script | Purpose | Arguments |
+| --- | --- | --- |
+| `scripts/train_zap_sources.py` | Unified CLI to synthesize verified corpus items, harvest external math sources, seed/learn episodic memory, audit all 5 pillars, and run pytest verification | `--train`, `--tier {TK,SD,SMP,SMA,S1,S2,S3,ALL}`, `--domain {matematika,pemrograman,fisika,kimia,ALL}`, `--count INT`, `--harvest`, `--max-items INT`, `--seed-memory`, `--learn-turn TEXT`, `--audit`, `--verify` |
+
+Invoke the script via `run_script()` or directly from the repository root:
+
+```python
+run_script("train_zap_sources.py", args=["--audit"])
+run_script("train_zap_sources.py", args=["--train", "--tier", "ALL", "--count", "25", "--audit", "--verify"])
+run_script("train_zap_sources.py", args=["--harvest", "--max-items", "25"])
+```
 
 ---
 
@@ -125,3 +152,19 @@ To verify that `test_dangerous_inputs_never_reach_sympy` is sensitive and never 
 
 * 📄 [**`references/DATA_SOURCES_SCHEMA.md`**](references/DATA_SOURCES_SCHEMA.md) — Exact data contracts, JSON schemas, and code templates for Taxonomy, Corpus items, Internet Harvesters, Agent Episodic Memory, and 3D Geometry entities.
 * 🧠 [**`references/SOCRATIC_ONTOLOGY.md`**](references/SOCRATIC_ONTOLOGY.md) — Guide to ZAP's Socratic scaffolding rules, cognitive disequilibrium counter-examples, misconception taxonomy, and Zero-Answer Guardrail invariants.
+
+## Limitations
+
+- **Curated harvester scope**: `--harvest` only pulls structured sources registered in `OPEN_MATH_SOURCES` (`gsm8k_sample`, `hf_gsm8k_api`, `wikimedia_math_theorems`) and rejects items without `is_verified: True`. Free-form web pages and narrative prose are not crawled.
+- **Non-math internet sources**: `pemrograman`, `fisika`, and `kimia` currently use procedural generators only and do not have external internet harvesters yet.
+- **Disabled sources**: `indo_kurikulum_sd` is disabled in `DISABLED_SOURCES` due to upstream HTTP 404.
+- **CAS scope**: SymPy equivalence and root conservation checks are bounded to supported algebraic/univariate polynomial and rational expressions defined in `backend/cfl/parser.py`.
+
+## Troubleshooting
+
+| Error | Cause | Solution |
+| --- | --- | --- |
+| `indo_kurikulum_sd : DILEWATI (404)` | Upstream URL returns HTTP 404 and is listed in `DISABLED_SOURCES` | Leave disabled until a verified accessible curriculum URL is configured in `harvester.py`. |
+| `--audit` exits with code `1` (`guardrail_leaks > 0` or `answer_leaks > 0`) | A prompt or visible field contains a leaked final solution | Inspect the flagged JSONL record and re-sanitize via `RobustZeroAnswerGuardrail.sanitize()`. |
+| `pytest` fails on `TestClient` socket binding on Windows | Restricted sandbox blocks `anyio` local loopback sockets | Run `python -m pytest -v -p no:cacheprovider tests/ backend/tests_platform/` with sandbox socket access enabled. |
+| `ModuleNotFoundError: No module named 'backend'` | Script launched outside repository root or incorrect `sys.path` | Run from the `logicodix/` repo root or via `run_script("train_zap_sources.py", ...)`. |
